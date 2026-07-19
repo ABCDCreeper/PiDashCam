@@ -1,0 +1,389 @@
+# # core_camera.py
+# import os
+# import time
+# import json
+# import psutil
+# import threading
+# import subprocess
+# import cv2
+# from datetime import datetime
+# from PyQt5.QtCore import pyqtSignal, QObject
+# from PyQt5.QtGui import QImage
+
+# class SystemUtils:
+#     @staticmethod
+#     def get_storage_devices():
+#         devices = []
+#         internal_path = os.path.expanduser("~/Videos")
+#         os.makedirs(internal_path, exist_ok=True)
+#         root_usage = psutil.disk_usage(internal_path)
+#         devices.append({
+#             "name": "💽 内录", 
+#             "path": internal_path, 
+#             "free_gb": round(root_usage.free / (1024**3), 1), 
+#             "percent": root_usage.percent, 
+#             "is_usb": False
+#         })
+        
+#         try:
+#             cmd = ["lsblk", "-o", "NAME,LABEL,MOUNTPOINT,TRAN", "-J"]
+#             res = subprocess.run(cmd, capture_output=True, text=True)
+#             for dev in json.loads(res.stdout).get("blockdevices", []):
+#                 if dev.get("tran") == "usb" and dev.get("mountpoint"):
+#                     label = dev.get("label") or f"U盘"
+#                     usage = psutil.disk_usage(dev["mountpoint"])
+#                     devices.append({
+#                         "name": f"🔌 {label}",
+#                         "path": dev["mountpoint"],
+#                         "free_gb": round(usage.free / (1024**3), 1),
+#                         "percent": usage.percent,
+#                         "is_usb": True
+#                     })
+#         except Exception:
+#             pass
+#         return devices
+
+# class CameraWorker(QObject):
+#     frame_ready = pyqtSignal(QImage, str)
+#     def __init__(self):
+#         super().__init__()
+#         self.cap = None
+#         self.running = False
+#         self.is_recording = False
+#         self.is_playback = False
+#         self.playback_file = None
+#         self.storage_path = os.path.expanduser("~/Videos")
+#         self.fps_target = 30
+#         self.width = 1280
+#         self.height = 720
+#         self.video_writer = None
+#         self.record_start_time = 0
+        
+#         # --- 真实车牌识别 (HyperLPR3) 状态变量 ---
+#         self.lpr_catcher = None
+#         self.lpr_busy = False
+#         self.plate_text = ""
+#         self.plate_box = None
+#         self.last_detect_time = 0
+        
+#         # 后台异步加载 AI 模型，避免启动时卡死 UI
+#         threading.Thread(target=self._load_lpr_model, daemon=True).start()
+
+#     def _load_lpr_model(self):
+#         try:
+#             import hyperlpr3
+#             # 实例化车牌识别模型
+#             self.lpr_catcher = hyperlpr3.LicensePlateCatcher()
+#             print("✅ HyperLPR3 车牌识别模型加载成功！")
+#         except ImportError:
+#             print("❌ 未安装 hyperlpr3，请在终端执行: pip3 install hyperlpr3")
+#         except Exception as e:
+#             print(f"❌ AI 模型加载失败: {e}")
+
+#     def _lpr_task(self, frame_copy):
+#         """真正的 AI 识别计算任务"""
+#         self.lpr_busy = True
+#         try:
+#             if self.lpr_catcher:
+#                 results = self.lpr_catcher(frame_copy)
+#                 # results 格式: [['京A88888', 0.99, [x1, y1, x2, y2]]]
+#                 if results and len(results) > 0:
+#                     # 提取置信度最高的一个车牌
+#                     best_plate = results[0]
+#                     self.plate_text = best_plate[0]
+#                     self.plate_box = [int(v) for v in best_plate[2]]
+#                     self.last_detect_time = time.time()
+#         except Exception:
+#             pass
+#         finally:
+#             self.lpr_busy = False
+
+#     def start_camera(self):
+#         if self.cap is None or not self.cap.isOpened():
+#             self.cap = cv2.VideoCapture(0)
+#             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+#             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+#         self.running = True
+#         threading.Thread(target=self._loop, daemon=True).start()
+
+#     def _loop(self):
+#         while self.running:
+#             if self.is_playback and self.playback_file:
+#                 self._run_playback()
+#                 continue
+                
+#             if self.cap is None or not self.cap.isOpened():
+#                 time.sleep(0.2)
+#                 continue
+#             ret, frame = self.cap.read()
+#             if not ret:
+#                 time.sleep(0.01)
+#                 continue
+            
+#             if self.is_recording:
+#                 self._handle_recording(frame)
+#                 elapsed = int(time.time() - self.record_start_time)
+#                 cv2.circle(frame, (40, 40), 12, (0, 0, 255), -1)
+#                 cv2.putText(frame, f"REC {elapsed}s", (60, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+                
+#             cv2.putText(frame, "AI Status: ON", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            
+#             # --- 动态截帧，交给后台 AI 线程识别 ---
+#             current_time = time.time()
+#             # 限制每 0.5 秒最多触发一次识别，避免压垮树莓派 CPU
+#             if self.lpr_catcher and not self.lpr_busy and (current_time - self.last_detect_time > 0.5):
+#                 # 将图片缩小一半丢给 AI 算，极大提升树莓派推理速度
+#                 small_frame = cv2.resize(frame, (self.width // 2, self.height // 2))
+#                 threading.Thread(target=self._lpr_task, args=(small_frame,), daemon=True).start()
+
+#             # --- 动态绘制真实的车牌识别结果 ---
+#             osd_text = ""
+#             # 如果识别到了车牌，在画面上保持框和文字显示 2 秒
+#             if self.plate_box and (current_time - self.last_detect_time < 2.0):
+#                 # 因为 AI 是在缩小一半的图上识别的，画图时坐标要乘 2 还原位置
+#                 x1, y1, x2, y2 = [v * 2 for v in self.plate_box]
+#                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
+#                 cv2.putText(frame, f"ID: {self.plate_text}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+#                 osd_text = f"📷 识别车牌: {self.plate_text}"
+            
+#             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+#             h, w, ch = rgb_frame.shape
+#             q_img = QImage(rgb_frame.data, w, h, ch * w, QImage.Format_RGB888).copy()
+            
+#             self.frame_ready.emit(q_img, osd_text)
+#             time.sleep(1 / self.fps_target)
+            
+#     def _handle_recording(self, frame):
+#         now = time.time()
+#         if self.video_writer is None or (now - self.record_start_time) > 180:
+#             self.stop_recording_file()
+#             os.makedirs(self.storage_path, exist_ok=True)
+#             filename = datetime.now().strftime("REC_%Y%m%d_%H%M%S.mp4")
+#             filepath = os.path.join(self.storage_path, filename)
+#             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+#             self.video_writer = cv2.VideoWriter(filepath, fourcc, self.fps_target, (self.width, self.height))
+#             self.record_start_time = now
+
+#         if self.video_writer:
+#             self.video_writer.write(frame)
+
+#     def stop_recording_file(self):
+#         if self.video_writer:
+#             self.video_writer.release()
+#             self.video_writer = None
+            
+#     def _run_playback(self):
+#         p_cap = cv2.VideoCapture(self.playback_file)
+#         while self.running and self.is_playback and p_cap.isOpened():
+#             ret, frame = p_cap.read()
+#             if not ret:
+#                 break
+#             cv2.putText(frame, "[Playback]", (40, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 200, 255), 3)
+#             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+#             h, w, ch = rgb_frame.shape
+#             q_img = QImage(rgb_frame.data, w, h, ch * w, QImage.Format_RGB888).copy()
+#             self.frame_ready.emit(q_img, "")
+#             time.sleep(1 / 30)
+#         p_cap.release()
+#         self.is_playback = False
+
+#     def stop(self):
+#         self.running = False
+#         self.is_recording = False
+#         self.stop_recording_file()
+#         if self.cap: self.cap.release()
+# core_camera.py
+import os
+import time
+import json
+import psutil
+import threading
+import subprocess
+import cv2
+from datetime import datetime
+from PyQt5.QtCore import pyqtSignal, QObject
+from PyQt5.QtGui import QImage
+
+class SystemUtils:
+    @staticmethod
+    def get_storage_devices():
+        devices = []
+        internal_path = os.path.expanduser("~/Videos")
+        os.makedirs(internal_path, exist_ok=True)
+        root_usage = psutil.disk_usage(internal_path)
+        devices.append({
+            "name": "💽 内录", 
+            "path": internal_path, 
+            "free_gb": round(root_usage.free / (1024**3), 1), 
+            "percent": root_usage.percent, 
+            "is_usb": False
+        })
+        
+        try:
+            cmd = ["lsblk", "-o", "NAME,LABEL,MOUNTPOINT,TRAN", "-J"]
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            for dev in json.loads(res.stdout).get("blockdevices", []):
+                if dev.get("tran") == "usb" and dev.get("mountpoint"):
+                    label = dev.get("label") or f"U盘"
+                    usage = psutil.disk_usage(dev["mountpoint"])
+                    devices.append({
+                        "name": f"🔌 {label}",
+                        "path": dev["mountpoint"],
+                        "free_gb": round(usage.free / (1024**3), 1),
+                        "percent": usage.percent,
+                        "is_usb": True
+                    })
+        except Exception:
+            pass
+        return devices
+
+class CameraWorker(QObject):
+    frame_ready = pyqtSignal(QImage, str)
+    def __init__(self):
+        super().__init__()
+        self.cap = None
+        self.running = False
+        self.is_recording = False
+        self.is_playback = False
+        self.playback_file = None
+        self.storage_path = os.path.expanduser("~/Videos")
+        self.fps_target = 30
+        self.width = 1280
+        self.height = 720
+        self.video_writer = None
+        self.record_start_time = 0
+        
+        # --- 真实车牌识别 (HyperLPR3) 状态变量 ---
+        self.lpr_catcher = None
+        self.lpr_busy = False
+        self.plate_text = ""
+        self.plate_box = None
+        self.last_detect_time = 0
+        self.last_infer_time = 0  # 🌟 新增：专门记录上次发起 AI 推理的时间，解决 CPU 100% 问题
+        
+        threading.Thread(target=self._load_lpr_model, daemon=True).start()
+
+    def _load_lpr_model(self):
+        try:
+            import hyperlpr3
+            self.lpr_catcher = hyperlpr3.LicensePlateCatcher()
+            print("✅ HyperLPR3 车牌识别模型加载成功！")
+        except ImportError:
+            print("❌ 未安装 hyperlpr3，请在终端执行: pip3 install hyperlpr3")
+        except Exception as e:
+            print(f"❌ AI 模型加载失败: {e}")
+
+    def _lpr_task(self, frame_copy):
+        """真正的 AI 识别计算任务"""
+        self.lpr_busy = True
+        self.last_infer_time = time.time()  # 🌟 只要开始推理就刷新冷却时间
+        try:
+            if self.lpr_catcher:
+                results = self.lpr_catcher(frame_copy)
+                # results 格式: [['京A88888', 0.99, 0, [x1, y1, x2, y2]]]
+                if results and len(results) > 0:
+                    best_plate = results[0]
+                    self.plate_text = best_plate[0]
+                    # 🌟 修复 Bug：索引 3 才是坐标框 [x1, y1, x2, y2]，索引 2 是车牌类型！
+                    self.plate_box = [int(v) for v in best_plate[3]]
+                    self.last_detect_time = time.time()
+        except Exception as e:
+            print(f"⚠️ 车牌识别异常: {e}")  # 打印出异常，不再静默吞掉
+        finally:
+            self.lpr_busy = False
+
+    def start_camera(self):
+        if self.cap is None or not self.cap.isOpened():
+            self.cap = cv2.VideoCapture(0)
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        self.running = True
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def _loop(self):
+        while self.running:
+            if self.is_playback and self.playback_file:
+                self._run_playback()
+                continue
+                
+            if self.cap is None or not self.cap.isOpened():
+                time.sleep(0.2)
+                continue
+            ret, frame = self.cap.read()
+            if not ret:
+                time.sleep(0.01)
+                continue
+            
+            if self.is_recording:
+                self._handle_recording(frame)
+                elapsed = int(time.time() - self.record_start_time)
+                cv2.circle(frame, (40, 40), 12, (0, 0, 255), -1)
+                cv2.putText(frame, f"REC {elapsed}s", (60, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+                
+            cv2.putText(frame, "AI Status: ON", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            
+            # --- 动态截帧，交给后台 AI 线程识别 ---
+            current_time = time.time()
+            # 🌟 修复：用 self.last_infer_time 控制推理频率，限制为 0.4 秒一次，极大降低 CPU 负载
+            if self.lpr_catcher and not self.lpr_busy and (current_time - self.last_infer_time > 0.4):
+                small_frame = cv2.resize(frame, (self.width // 2, self.height // 2))
+                threading.Thread(target=self._lpr_task, args=(small_frame,), daemon=True).start()
+
+            # --- 动态绘制真实的车牌识别结果 ---
+            osd_text = ""
+            if self.plate_box and (current_time - self.last_detect_time < 2.0):
+                # 将缩小一半的图坐标还原到原图
+                x1, y1, x2, y2 = [v * 2 for v in self.plate_box]
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                # 🌟 修复：cv2.putText 不支持中文，这里用英文标识，真正的中文交给 UI 层展示
+                cv2.putText(frame, f"Plate: {self.plate_text}", (x1, max(20, y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                osd_text = f"📷 识别车牌: {self.plate_text}"
+            
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb_frame.shape
+            q_img = QImage(rgb_frame.data, w, h, ch * w, QImage.Format_RGB888).copy()
+            
+            self.frame_ready.emit(q_img, osd_text)
+            time.sleep(1 / self.fps_target)
+            
+    def _handle_recording(self, frame):
+        now = time.time()
+        if self.video_writer is None or (now - self.record_start_time) > 180:
+            self.stop_recording_file()
+            os.makedirs(self.storage_path, exist_ok=True)
+            # 🌟 修复：改为 .mkv 流式封装，即使树莓派断电/直接拔电，已录制的视频也不会损坏
+            filename = datetime.now().strftime("REC_%Y%m%d_%H%M%S.mkv")
+            filepath = os.path.join(self.storage_path, filename)
+            # 🌟 使用 mp4v 或 XVID 编码格式封装入 MKV 容器
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            self.video_writer = cv2.VideoWriter(filepath, fourcc, self.fps_target, (self.width, self.height))
+            self.record_start_time = now
+
+        if self.video_writer:
+            self.video_writer.write(frame)
+
+    def stop_recording_file(self):
+        if self.video_writer:
+            self.video_writer.release()
+            self.video_writer = None
+            
+    def _run_playback(self):
+        p_cap = cv2.VideoCapture(self.playback_file)
+        while self.running and self.is_playback and p_cap.isOpened():
+            ret, frame = p_cap.read()
+            if not ret:
+                break
+            cv2.putText(frame, "[Playback]", (40, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 200, 255), 3)
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb_frame.shape
+            q_img = QImage(rgb_frame.data, w, h, ch * w, QImage.Format_RGB888).copy()
+            self.frame_ready.emit(q_img, "")
+            time.sleep(1 / 30)
+        p_cap.release()
+        self.is_playback = False
+
+    def stop(self):
+        self.running = False
+        self.is_recording = False
+        self.stop_recording_file()
+        if self.cap: self.cap.release()
