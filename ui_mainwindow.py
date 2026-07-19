@@ -7,10 +7,11 @@ from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QStackedWidget, QListWidget, 
                              QListWidgetItem, QRadioButton, QButtonGroup, 
-                             QSizePolicy, QDialog, QSlider, QScroller)
+                             QSizePolicy, QDialog)
 
 from ui_keyboard import TouchKeyboard
 from ui_wifi import WifiScannerDialog
+from touch_widgets import TapSlider, TouchScrollListWidget
 from core_camera import SystemUtils, CameraWorker
 
 class DashcamMainWindow(QMainWindow):
@@ -46,6 +47,9 @@ class DashcamMainWindow(QMainWindow):
         self.worker = CameraWorker()
         self.worker.frame_ready.connect(self.update_monitor)
         self.worker.playback_progress.connect(self.update_playback_ui)
+        self.worker.storage_notify.connect(self.on_storage_notify)
+        self.worker.storage_path_changed.connect(self.on_storage_path_changed)
+        self.worker.recording_toggled.connect(self.on_recording_toggled)
         self.worker.start_camera()
 
         self.init_ui()
@@ -60,6 +64,9 @@ class DashcamMainWindow(QMainWindow):
         QTimer.singleShot(500, self.poll_network_status) # 启动时先查一次
 
     def auto_start_recording(self):
+        # 没有 U 盘不自动录像
+        if not self.worker.storage_path:
+            return
         if not self.btn_record.isChecked():
             self.btn_record.setChecked(True)
             self.toggle_record()
@@ -96,6 +103,12 @@ class DashcamMainWindow(QMainWindow):
         self.ai_status_lbl = QLabel(self.video_label)
         self.ai_status_lbl.setStyleSheet("color: #00ffff; background-color: rgba(0, 0, 0, 180); font-size: 22px; font-weight: bold; padding: 8px 14px; border: 2px solid #00ffff; border-radius: 6px;")
         self.ai_status_lbl.hide()
+
+        # 全屏“请插入U盘”提示
+        self.no_usb_lbl = QLabel("⚠️ 未检测到U盘\n请插入U盘开始录制", self.video_label)
+        self.no_usb_lbl.setAlignment(Qt.AlignCenter)
+        self.no_usb_lbl.setStyleSheet("background-color: rgba(0, 0, 0, 220); color: #ff4444; font-size: 28px; font-weight: bold;")
+        self.no_usb_lbl.hide()
 
         self.stack = QStackedWidget()
         main_layout.addWidget(self.stack, stretch=3)
@@ -176,8 +189,7 @@ class DashcamMainWindow(QMainWindow):
         self.lbl_play_time = QLabel("00:00 / 00:00")
         self.lbl_play_time.setStyleSheet("color: #00ffff; font-size: 18px; font-weight: bold; min-width: 120px;")
         
-        self.slider_progress = QSlider(Qt.Horizontal)
-        # 放大滑块区域，防止误触或拖滑出界
+        self.slider_progress = TapSlider(Qt.Horizontal)
         self.slider_progress.setStyleSheet("""
             QSlider::groove:horizontal { height: 16px; background: #222; border-radius: 8px; }
             QSlider::sub-page:horizontal { background: #0073e6; border-radius: 8px; }
@@ -205,10 +217,7 @@ class DashcamMainWindow(QMainWindow):
         
         layout.addLayout(ctrl_layout, stretch=6)
 
-        self.list_videos = QListWidget()
-        
-        self.list_videos.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        QScroller.grabGesture(self.list_videos.viewport(), QScroller.LeftMouseButtonGesture)
+        self.list_videos = TouchScrollListWidget()
         self.list_videos.itemClicked.connect(self.play_selected_video)
         layout.addWidget(self.list_videos, stretch=4)
         return page
@@ -250,6 +259,24 @@ class DashcamMainWindow(QMainWindow):
             # 🌟 核心修复：不直接给变量赋值，而是调用专职切盘方法！
             self.worker.switch_storage_path(new_path)
             self.show_osd_message(f"✅ 存储路径已实时切换至:\n{new_path}\n当前录像已无缝迁移！")
+
+    def on_storage_notify(self, msg):
+        """接收后台线程的存储切换结果通知（成功/失败）"""
+        self.show_osd_message(msg)
+
+    def on_storage_path_changed(self, new_path):
+        """存储路径变更后刷新 UI radio 按钮"""
+        self.refresh_storage_ui()
+
+    def on_recording_toggled(self, recording):
+        """后台录制状态变更 → 同步按钮"""
+        self.btn_record.setChecked(recording)
+        if recording:
+            self.btn_record.setText("■ 录像中 (点此停止)")
+            self.btn_record.setStyleSheet("background-color: #922b21; font-size: 20px;")
+        else:
+            self.btn_record.setText("● 开始录像")
+            self.btn_record.setStyleSheet("background-color: #1b4f72; font-size: 20px;")
 
     def open_playback_page(self):
         self.list_videos.clear()
@@ -319,6 +346,13 @@ class DashcamMainWindow(QMainWindow):
             self.ai_status_lbl.show()
         else:
             self.ai_status_lbl.hide()
+        
+        # 全屏“请插入U盘”提示
+        if not self.worker.storage_path:
+            self.no_usb_lbl.resize(label_size)
+            self.no_usb_lbl.show()
+        else:
+            self.no_usb_lbl.hide()
             
         # 确保网络状态栏永远浮动在左上角
         y = self.video_label.height() - self.net_status_lbl.height() - 15

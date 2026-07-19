@@ -3,8 +3,10 @@ import time
 import threading
 import subprocess
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QLabel, QListWidget, 
-                             QHBoxLayout, QPushButton, QListWidgetItem, QScroller)
+from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QLabel,
+                             QHBoxLayout, QPushButton, QListWidgetItem)
+
+from touch_widgets import TouchScrollListWidget
 
 class WifiWorker(QObject):
     scan_finished = pyqtSignal(list)
@@ -53,9 +55,7 @@ class WifiScannerDialog(QDialog):
         self.lbl_status = QLabel("正在深度扫描周边 Wi-Fi 信号...")
         layout.addWidget(self.lbl_status)
         
-        self.list_widget = QListWidget()
-        self.list_widget.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        QScroller.grabGesture(self.list_widget.viewport(), QScroller.LeftMouseButtonGesture)
+        self.list_widget = TouchScrollListWidget()
         layout.addWidget(self.list_widget)
         
         btn_layout = QHBoxLayout()

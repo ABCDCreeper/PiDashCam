@@ -14,16 +14,9 @@ class SystemUtils:
     @staticmethod
     def get_storage_devices():
         devices = []
-        internal_path = os.path.expanduser("~/Videos")
-        os.makedirs(internal_path, exist_ok=True)
-        root_usage = psutil.disk_usage(internal_path)
-        devices.append({
-            "name": "💽 内录", 
-            "path": internal_path, 
-            "free_gb": round(root_usage.free / (1024**3), 1), 
-            "percent": root_usage.percent, 
-            "is_usb": False
-        })
+        
+        # 清理已拔出 USB 留下的废弃挂载目录
+        SystemUtils._cleanup_stale_mounts()
         
         try:
             cmd = ["lsblk", "-o", "NAME,LABEL,MOUNTPOINT,TRAN,RM,PKNAME,TYPE", "-J"]
@@ -69,16 +62,17 @@ class SystemUtils:
                     if mountpoint in ["/", "/boot", "/boot/firmware"]:
                         continue
                         
-                    # 🌟 核心修改：使用 sudo mkdir -p 创建目录，彻底解决 [Errno 13] 权限问题！
+                    # 挂载 USB 设备（需 root 运行 DashCam 才能写入 exFAT）
+                    target_mount = f"/mnt/usb_{dev_name}"
                     if not mountpoint:
-                        target_mount = f"/mnt/usb_{dev_name}"
                         subprocess.run(["sudo", "mkdir", "-p", target_mount], capture_output=True)
-                        m_res = subprocess.run(["sudo", "mount", f"/dev/{dev_name}", target_mount], capture_output=True, text=True)
+                        m_res = subprocess.run(
+                            ["sudo", "mount", f"/dev/{dev_name}", target_mount],
+                            capture_output=True, text=True
+                        )
                         if m_res.returncode == 0:
                             mountpoint = target_mount
-                            # 🌟 核心修复 1：挂载成功后，立刻使用 chmod 777 开放读写权限！解决普通用户写不进去的问题！
-                            subprocess.run(["sudo", "chmod", "-R", "777", target_mount], capture_output=True)
-                            print(f"🔌 暴力挂载且授权成功: /dev/{dev_name} -> {mountpoint}")
+                            print(f"🔌 挂载成功: /dev/{dev_name} -> {mountpoint}")
                         else:
                             print(f"⚠️ 无法挂载 /dev/{dev_name}: {m_res.stderr.strip()}")
                             continue
@@ -103,9 +97,31 @@ class SystemUtils:
             
         return devices
 
+    @staticmethod
+    def _cleanup_stale_mounts():
+        """卸载并删除已不存在的 USB 设备对应的 /mnt/usb_* 目录"""
+        import glob
+        try:
+            # 获取当前存在的 sd 设备列表
+            live = set()
+            for dev in glob.glob("/dev/sd[a-z]"):
+                live.add(dev.split("/")[-1])
+            for d in glob.glob("/mnt/usb_sd*"):
+                devname = d.split("_", 1)[-1]
+                if devname not in live:
+                    # 设备已不存在 → 强制卸载并删除目录
+                    subprocess.run(["sudo", "umount", "-l", d], capture_output=True)
+                    subprocess.run(["sudo", "rm", "-rf", d], capture_output=True)
+                    print(f"🧹 已清理废弃挂载: {d}")
+        except Exception:
+            pass
+
 class CameraWorker(QObject):
     frame_ready = pyqtSignal(QImage, str) 
     playback_progress = pyqtSignal(int, int, str)
+    storage_notify = pyqtSignal(str)  # 存储切换结果通知 UI（成功/失败）
+    storage_path_changed = pyqtSignal(str)  # 存储路径变更（通知 UI 刷新 radio）
+    recording_toggled = pyqtSignal(bool)  # 录制状态变更（同步 UI 按钮）
 
     def __init__(self):
         super().__init__()
@@ -117,7 +133,7 @@ class CameraWorker(QObject):
         self.seek_frame = None
         self.playback_file = None
         self.new_playback_file = None  
-        self.storage_path = os.path.expanduser("~/Videos")
+        self.storage_path = ""  # 初始为空，等 U 盘检测
         self.fps_target = 30
         self.width = 1280
         self.height = 720
@@ -134,14 +150,70 @@ class CameraWorker(QObject):
         self.last_infer_time = 0
         self.last_log_time = 0
         
+        self._pending_storage_path = None  # 待切换的目标路径
+        self._frame_count = 0  # 用于周期性 USB 检测
+        self._no_usb_shown = False  # 全屏 OSD 防重复
+        
+        # 启动时恢复上一次的 USB 存储位置
+        saved = self._load_storage_config()
+        if saved and os.path.ismount(saved) and os.path.isdir(saved):
+            self.storage_path = saved
+            print(f"📂 已恢复存储位置: {saved}")
+        
+        # 启动时检测 U 盘：有则自动切换
+        self._auto_select_usb()
+        
         threading.Thread(target=self._load_lpr_model, daemon=True).start()
 
     def switch_storage_path(self, new_path):
-        if self.storage_path != new_path:
-            self.storage_path = new_path
-            if self.is_recording and self.video_writer:
-                print(f"🔄 切换存储路径至: {new_path}，立刻触发录像分段...")
-                self.stop_recording_file() # 关掉老路径的文件，下个循环会自动在 new_path 创建新文件
+        """安全切换存储路径：先保存当前片段到旧盘，再在新盘开始新片段。
+        
+        如果新盘创建失败，自动回退到旧路径继续录像，不会卡死。
+        """
+        if self.storage_path == new_path:
+            return
+        self._pending_storage_path = new_path
+        if self.is_recording and self.video_writer:
+            print(f"🔄 正在保存当前片段到原盘，即将切换至: {new_path}")
+            self.stop_recording_file()  # 保存旧盘文件，下个循环在新盘创建
+
+    def _auto_select_usb(self):
+        """检测 U 盘，有则自动切换，无则清空路径并通知 UI"""
+        try:
+            devices = SystemUtils.get_storage_devices()
+            for dev in devices:
+                if dev.get("is_usb"):
+                    usb_path = dev["path"]
+                    # 先测试能否写入
+                    test_file = os.path.join(usb_path, ".dashcam_write_test")
+                    try:
+                        with open(test_file, "w") as f:
+                            f.write("ok")
+                        os.remove(test_file)
+                    except Exception:
+                        continue
+                    # 已经在正确的 U 盘上？
+                    if self.storage_path == usb_path:
+                        return
+                    print(f"🔍 检测到 U 盘: {usb_path}，自动切换并开始录制...")
+                    self.switch_storage_path(usb_path)
+                    # 确保录制线程知道要开始录
+                    if not self.is_recording:
+                        self.is_recording = True
+                        self.recording_toggled.emit(True)
+                    return
+            # 没找到可用的 USB
+            if self.storage_path:
+                # 之前有盘，现在没了
+                self.storage_path = ""
+                self._save_storage_config("")
+                self.is_recording = False
+                self.recording_toggled.emit(False)
+                self.storage_notify.emit("⚠️ U盘已拔出，请插入U盘")
+                self.storage_path_changed.emit("")
+                self._no_usb_shown = False
+        except Exception:
+            pass
 
     def _load_lpr_model(self):
         try:
@@ -249,7 +321,11 @@ class CameraWorker(QObject):
             cv2.putText(frame, now_str, (x_pos, y_pos), font, font_scale, (255, 255, 255), thickness_fg, cv2.LINE_AA)
             
             if self.is_recording:
-                self._handle_recording(frame)
+                try:
+                    self._handle_recording(frame)
+                except Exception:
+                    # U盘突然拔出等异常，保活录制线程
+                    pass
                 elapsed = int(time.time() - self.record_start_time)
                 cv2.circle(frame, (40, 40), 12, (0, 0, 255), -1)
                 cv2.putText(frame, f"REC {elapsed}s", (60, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
@@ -275,23 +351,44 @@ class CameraWorker(QObject):
             q_img = QImage(rgb_frame.data, w, h, ch * w, QImage.Format_RGB888).copy()
             
             self.frame_ready.emit(q_img, osd_text)
+            
+            # 每 3 秒检测一次 U 盘热插拔
+            self._frame_count += 1
+            if self._frame_count % 90 == 0:
+                self._auto_select_usb()
+            
             time.sleep(1 / self.fps_target)
                 
     def _handle_recording(self, frame):
+        # 未检测到 U 盘（且无待切换路径）：停止录制
+        if not self.storage_path and not self._pending_storage_path:
+            self.is_recording = False
+            self.stop_recording_file()
+            return
+        
         now = time.time()
         if self.video_writer is None or (now - self.record_start_time) > 180:
             self.stop_recording_file()
             self._check_and_clean_disk()
             
+            # 处理待切换的存储路径：先尝试在新盘创建，失败则回退到旧盘
+            target_path = self.storage_path
+            if self._pending_storage_path is not None:
+                target_path = self._pending_storage_path
+            
             # 🌟 再次确保目标文件夹有写入权限
             try:
-                os.makedirs(self.storage_path, exist_ok=True)
+                os.makedirs(target_path, exist_ok=True)
             except Exception as e:
-                print(f"❌ 无法创建目录 {self.storage_path}: {e}")
+                print(f"❌ 无法创建目录 {target_path}: {e}")
+                if self._pending_storage_path is not None:
+                    print(f"⚠️ 新盘不可用，回退到旧路径: {self.storage_path}")
+                    self.storage_notify.emit(f"⚠️ 无法创建目录 {target_path}，已回退旧盘")
+                    self._pending_storage_path = None
                 return
             
             self.current_video_filename = datetime.now().strftime("REC_%Y%m%d_%H%M%S.mkv")
-            filepath = os.path.join(self.storage_path, self.current_video_filename)
+            filepath = os.path.join(target_path, self.current_video_filename)
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             self.video_writer = cv2.VideoWriter(filepath, fourcc, self.fps_target, (self.width, self.height))
             
@@ -300,13 +397,37 @@ class CameraWorker(QObject):
                 print(f"❌ 致命错误：无法写入文件 {filepath}！请检查目录写入权限！")
                 self.video_writer.release()
                 self.video_writer = None
+                if self._pending_storage_path is not None:
+                    print(f"⚠️ 新盘创建失败，回退到旧路径: {self.storage_path}")
+                    self.storage_notify.emit(f"⚠️ 无法写入 {target_path}，已回退旧盘")
+                    self._pending_storage_path = None
                 return
+            
+            # 新盘切换成功，正式更新路径
+            if self._pending_storage_path is not None:
+                self.storage_path = self._pending_storage_path
+                self._pending_storage_path = None
+                self._save_storage_config(self.storage_path)
+                self.storage_notify.emit(f"✅ 已切换至新盘: {self.storage_path}")
+                self.storage_path_changed.emit(self.storage_path)
+                print(f"✅ 存储路径已切换至: {self.storage_path}")
                 
             self.record_start_time = now
             print(f"🎬 开始录制新分段: {filepath}")
 
         if self.video_writer:
-            self.video_writer.write(frame)
+            try:
+                self.video_writer.write(frame)
+            except Exception:
+                # U盘拔出等写入失败：停止录制
+                print(f"⚠️ 写入失败（U盘已拔出），停止录制")
+                self.stop_recording_file()
+                self.storage_path = ""
+                self._save_storage_config("")
+                self._pending_storage_path = None
+                self.is_recording = False
+                self._no_usb_shown = False
+                self.storage_notify.emit("⚠️ U盘写入失败，已停止录制")
 
     def stop_recording_file(self):
         if self.video_writer:
@@ -314,6 +435,28 @@ class CameraWorker(QObject):
             self.video_writer = None
             self.current_video_filename = ""
             print("🛑 录制底层资源已安全释放。")
+
+    def _load_storage_config(self):
+        """读取上次保存的存储路径"""
+        cfg = os.path.join(os.path.expanduser("~/Videos"), "storage_config.json")
+        try:
+            if os.path.exists(cfg):
+                with open(cfg, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    return data.get("storage_path", "")
+        except Exception:
+            pass
+        return ""
+
+    def _save_storage_config(self, path):
+        """持久化存储路径，下次启动自动恢复"""
+        cfg = os.path.join(os.path.expanduser("~/Videos"), "storage_config.json")
+        try:
+            os.makedirs(os.path.dirname(cfg), exist_ok=True)
+            with open(cfg, "w", encoding="utf-8") as f:
+                json.dump({"storage_path": path}, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
             
     def _run_playback(self):
         p_cap = cv2.VideoCapture(self.playback_file)
