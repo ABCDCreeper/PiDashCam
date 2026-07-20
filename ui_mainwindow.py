@@ -170,23 +170,62 @@ class TimeSettingDialog(QDialog):
             f"{self.year}-{self.month:02d}-{self.day:02d} "
             f"{self.hour:02d}:{self.minute:02d}:00"
         )
+
+        # 收集所有错误信息
+        errors = []
+
         try:
+            # 方案 1：date -s
             res = subprocess.run(
-                ["sudo", "date", "-s", time_str],
+                ["sudo", "-n", "date", "-s", time_str],
                 capture_output=True, text=True, timeout=10
             )
             if res.returncode != 0:
-                QMessageBox.warning(self, "设置失败",
-                    f"无法设置系统时间：\n{res.stderr.strip()}")
-                return
+                err = res.stderr.strip() or "(无错误输出)"
+                # 如果是 sudo 密码问题，尝试 timedatectl
+                if "password" in err.lower() or "no tty" in err.lower():
+                    # 尝试 timedatectl 作为 fallback
+                    res = subprocess.run(
+                        ["sudo", "-n", "timedatectl", "set-time", time_str],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    if res.returncode != 0:
+                        errors.append(f"date -s: {err}")
+                        errors.append(f"timedatectl: {res.stderr.strip()}")
+                else:
+                    errors.append(f"date -s: {err}")
+        except Exception as e:
+            errors.append(f"date -s 异常: {e}")
 
-            res2 = subprocess.run(
-                ["sudo", "hwclock", "--systohc"],
-                capture_output=True, text=True, timeout=10
-            )
-            if res2.returncode != 0:
+        if not errors:
+            # 时间设置成功，验证
+            try:
+                verify = subprocess.run(
+                    ["date", "+%Y-%m-%d %H:%M:%S"],
+                    capture_output=True, text=True, timeout=5
+                )
+                actual = verify.stdout.strip()
+                expected = time_str
+                if actual != expected:
+                    errors.append(f"设置后验证失败：期望 {expected}，实际 {actual}")
+            except Exception as e:
+                pass  # 验证失败不影响，只记录
+
+        if not errors:
+            # 同步到 RTC
+            try:
+                res2 = subprocess.run(
+                    ["sudo", "-n", "hwclock", "--systohc"],
+                    capture_output=True, text=True, timeout=10
+                )
+                if res2.returncode != 0:
+                    QMessageBox.warning(self, "部分成功",
+                        f"系统时间已设置，但同步 DS3231 失败：\n{res2.stderr.strip()}")
+                    self.accept()
+                    return
+            except Exception as e:
                 QMessageBox.warning(self, "部分成功",
-                    f"系统时间已设置，但同步 DS3231 失败：\n{res2.stderr.strip()}")
+                    f"系统时间已设置，但同步 DS3231 时异常：\n{e}")
                 self.accept()
                 return
 
@@ -194,8 +233,9 @@ class TimeSettingDialog(QDialog):
             if parent and hasattr(parent, "show_osd_message"):
                 parent.show_osd_message(f"✅ 时间已更新: {time_str}")
             self.accept()
-        except Exception as e:
-            QMessageBox.warning(self, "错误", f"设置时间时发生异常：\n{e}")
+        else:
+            QMessageBox.warning(self, "设置失败",
+                "无法设置系统时间：\n" + "\n".join(errors))
 
 
 class DashcamMainWindow(QMainWindow):
