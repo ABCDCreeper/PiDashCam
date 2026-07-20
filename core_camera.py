@@ -436,6 +436,8 @@ class CameraWorker(QObject):
     def start_camera(self):
         if self.cap is None or not self.cap.isOpened():
             self.cap = cv2.VideoCapture(0)
+            # 设置 MJPG 格式以支持 1080p（Pi Camera YUYV 最高仅 800×448）
+            self.cap.set(cv2.CAP_PROP_FOURCC, 1196444237)  # MJPG
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         self.running = True
@@ -529,6 +531,7 @@ class CameraWorker(QObject):
         if self.cap and self.cap.isOpened():
             self.cap.release()
         self.cap = cv2.VideoCapture(0)
+        self.cap.set(cv2.CAP_PROP_FOURCC, 1196444237)  # MJPG
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         self.running = True
