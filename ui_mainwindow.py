@@ -23,29 +23,22 @@ class TimeSettingDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("修改系统时间")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
-        self.setStyleSheet("background-color: #080808; color: white; font-size: 18px;")
+        self.setStyleSheet("background-color: #080808; color: white; font-size: 15px;")
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 15, 20, 15)
-        layout.setSpacing(12)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(4)
 
         title = QLabel("🕐 修改系统时间")
         title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("color: #00aaff; font-size: 30px; font-weight: bold; padding: 8px;")
+        title.setStyleSheet("color: #00aaff; font-size: 20px; font-weight: bold; padding: 2px;")
         layout.addWidget(title)
-
-        self.lbl_current = QLabel()
-        self.lbl_current.setAlignment(Qt.AlignCenter)
-        self.lbl_current.setStyleSheet(
-            "color: #39ff14; font-size: 24px; font-weight: bold; padding: 10px;"
-        )
-        layout.addWidget(self.lbl_current)
 
         # 实时系统时钟（每秒刷新）
         self.lbl_sys_time = QLabel()
         self.lbl_sys_time.setAlignment(Qt.AlignCenter)
         self.lbl_sys_time.setStyleSheet(
-            "color: #aaa; font-size: 18px; padding: 4px;"
+            "color: #aaa; font-size: 13px; padding: 1px;"
         )
         layout.addWidget(self.lbl_sys_time)
 
@@ -57,7 +50,6 @@ class TimeSettingDialog(QDialog):
         self.minute = now.minute
 
         self.val_labels = {}
-        self._update_current_display()
 
         layout.addLayout(self._make_row("年", "year"))
         layout.addLayout(self._make_row("月", "month"))
@@ -68,17 +60,17 @@ class TimeSettingDialog(QDialog):
         layout.addStretch()
 
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(15)
+        btn_row.setSpacing(10)
         btn_confirm = QPushButton("💾 保存")
         btn_confirm.setStyleSheet(
-            "background-color: #0088cc; font-size: 24px; font-weight: bold; "
-            "min-height: 65px; border-radius: 8px;"
+            "background-color: #0088cc; font-size: 17px; font-weight: bold; "
+            "min-height: 45px; border-radius: 6px;"
         )
         btn_confirm.clicked.connect(self._confirm)
         btn_cancel = QPushButton("❌ 取消")
         btn_cancel.setStyleSheet(
-            "background-color: #a93226; font-size: 24px; "
-            "min-height: 65px; border-radius: 8px;"
+            "background-color: #a93226; font-size: 17px; "
+            "min-height: 45px; border-radius: 6px;"
         )
         btn_cancel.clicked.connect(self.reject)
         btn_row.addWidget(btn_confirm)
@@ -93,12 +85,6 @@ class TimeSettingDialog(QDialog):
 
         self.showFullScreen()
 
-    def _update_current_display(self):
-        self.lbl_current.setText(
-            f"目标: {self.year}-{self.month:02d}-{self.day:02d} "
-            f"{self.hour:02d}:{self.minute:02d}:00"
-        )
-
     def _update_system_time(self):
         """每秒刷新实时系统时钟"""
         now = datetime.now()
@@ -109,36 +95,36 @@ class TimeSettingDialog(QDialog):
 
     def _make_row(self, label, field):
         row = QHBoxLayout()
-        row.setSpacing(10)
+        row.setSpacing(6)
 
         lbl = QLabel(label)
-        lbl.setStyleSheet("color: #aaa; font-size: 24px; font-weight: bold; min-width: 60px;")
+        lbl.setStyleSheet("color: #aaa; font-size: 18px; font-weight: bold; min-width: 40px;")
         lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         val_lbl = QLabel()
         val_lbl.setAlignment(Qt.AlignCenter)
         val_lbl.setStyleSheet(
-            "color: #fff; font-size: 32px; font-weight: bold; "
-            "min-width: 130px; min-height: 60px; "
-            "background-color: #1a1a1a; border: 2px solid #333; border-radius: 8px;"
+            "color: #fff; font-size: 22px; font-weight: bold; "
+            "min-width: 100px; min-height: 44px; "
+            "background-color: #1a1a1a; border: 2px solid #333; border-radius: 6px;"
         )
         self.val_labels[field] = val_lbl
         current = getattr(self, field)
         val_lbl.setText(str(current) if field == "year" else f"{current:02d}")
 
         btn_down = QPushButton("◀")
-        btn_down.setFixedSize(70, 70)
+        btn_down.setFixedSize(50, 50)
         btn_down.setStyleSheet(
-            "background-color: #2c3e50; font-size: 28px; "
-            "border-radius: 35px; font-weight: bold;"
+            "background-color: #2c3e50; font-size: 22px; "
+            "border-radius: 25px; font-weight: bold;"
         )
         btn_down.clicked.connect(lambda checked, f=field: self._adjust(f, -1))
 
         btn_up = QPushButton("▶")
-        btn_up.setFixedSize(70, 70)
+        btn_up.setFixedSize(50, 50)
         btn_up.setStyleSheet(
-            "background-color: #2c3e50; font-size: 28px; "
-            "border-radius: 35px; font-weight: bold;"
+            "background-color: #2c3e50; font-size: 22px; "
+            "border-radius: 25px; font-weight: bold;"
         )
         btn_up.clicked.connect(lambda checked, f=field: self._adjust(f, 1))
 
@@ -168,7 +154,6 @@ class TimeSettingDialog(QDialog):
             self.val_labels[field].setText(str(new_val))
         else:
             self.val_labels[field].setText(f"{new_val:02d}")
-        self._update_current_display()
 
     def _confirm(self):
         try:
