@@ -288,9 +288,7 @@ class CameraWorker(QObject):
         
         self.lpr_catcher = None
         self.lpr_busy = False
-        self.plate_text = ""
-        self.plate_box = None
-        self.plate_conf = 0.0
+        self.plates = []  # [(text, conf, box, detect_time), ...] — 支持多车牌
         self.last_detect_time = 0
         self.last_infer_time = 0
         self.last_log_time = 0
@@ -406,14 +404,18 @@ class CameraWorker(QObject):
             if self.lpr_catcher:
                 results = self.lpr_catcher(frame_copy)
                 if results:
-                    best_plate = results[0]
-                    conf = float(best_plate[1])
-                    if conf > 0.85:
-                        self.plate_text = best_plate[0]
-                        self.plate_conf = conf
-                        self.plate_box = [int(v) for v in best_plate[3]]
-                        self.last_detect_time = time.time()
-                        self._log_plate_to_json(self.plate_text, conf)
+                    now = time.time()
+                    new_plates = []
+                    for plate in results:
+                        conf = float(plate[1])
+                        if conf > 0.85:
+                            text = plate[0]
+                            box = [int(v) for v in plate[3]]
+                            new_plates.append((text, conf, box, now))
+                            self._log_plate_to_json(text, conf)
+                    if new_plates:
+                        self.plates = new_plates
+                        self.last_detect_time = now
         except Exception:
             pass
         finally:
@@ -520,10 +522,13 @@ class CameraWorker(QObject):
                 threading.Thread(target=self._lpr_task, args=(small_frame,), daemon=True).start()
 
             osd_text = ""
-            if self.plate_box and (current_time - self.last_detect_time < 2.5):
-                x1, y1, x2, y2 = [v * 2 for v in self.plate_box]
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                osd_text = f"📷 {self.plate_text} ({self.plate_conf:.2f})"
+            if self.plates and (current_time - self.last_detect_time < 2.5):
+                parts = []
+                for plate_text, plate_conf, plate_box, _ in self.plates:
+                    x1, y1, x2, y2 = [v * 2 for v in plate_box]
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                    parts.append(f"📷 {plate_text} ({plate_conf:.2f})")
+                osd_text = "  ".join(parts)
             
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb_frame.shape
