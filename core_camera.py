@@ -463,7 +463,7 @@ class CameraWorker(QObject):
 
                 def _flush_res():
                     nonlocal current_w, current_h, current_max_fps
-                    if current_w > 0 and current_max_fps >= 10:
+                    if current_w > 0 and current_h > 480 and current_max_fps > 15:
                         res_set.add((current_w, current_h))
                     current_w, current_h, current_max_fps = 0, 0, 0
 
@@ -480,7 +480,7 @@ class CameraWorker(QObject):
                         fps = round(float(m_int.group(1)))
                         if fps > current_max_fps:
                             current_max_fps = fps
-                        if 1 <= fps <= 120:
+                        if fps > 15 and fps <= 120:
                             fps_set.add(fps)
                 _flush_res()  # 最后一个分辨率
         except Exception:
@@ -516,10 +516,10 @@ class CameraWorker(QObject):
                 threading.Thread(target=self._loop, daemon=True).start()
 
         if not res_set:
-            res_set = {(640, 480), (1280, 720)}
+            res_set = {(1280, 720), (1920, 1080)}
 
         if not fps_set:
-            fps_set = {10, 15, 20, 25, 30, 60}
+            fps_set = {20, 25, 30, 60}
 
         res_list = sorted(res_set, key=lambda x: x[0] * x[1])
         fps_list = sorted(fps_set)
