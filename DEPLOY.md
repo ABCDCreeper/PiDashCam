@@ -53,8 +53,14 @@ ssh cam@192.168.x.x
 ```bash
 sudo apt update && sudo apt upgrade -y
 sudo apt install -y git python3-pip python3-pyqt5 python3-opencv \
-                    python3-psutil network-manager v4l-utils i2c-tools
+                    python3-psutil network-manager v4l-utils i2c-tools \
+                    cage seatd
 ```
+
+| 包 | 作用 |
+|---|---|
+| `cage` | Wayland kiosk compositor，让 PyQt5 直接在 Wayland 上全屏，无需桌面环境 |
+| `seatd` | 最小化 seat 管理守护进程，为 cage 提供 DRM/输入设备访问 |
 
 ### 3.2 启用 I2C / 串口 / 摄像头
 
@@ -107,6 +113,42 @@ sudo nmcli connection modify Pi-Dashcam wifi-sec.key-mgmt wpa-psk \
     wifi-sec.psk "dashcam123"
 ```
 
+### 3.6 启用 seatd 并配置权限（Wayland 必需）
+
+seatd 是一个最小化 seat 管理守护进程，负责在无桌面环境下管理 DRM 设备和输入设备的访问权。
+
+```bash
+sudo systemctl enable seatd
+sudo systemctl start seatd
+# cam 用户加入必要组：video（GPU）、render（硬件加速）、input（触摸屏）、plugdev（USB）
+sudo usermod -aG video,render,input,plugdev cam
+```
+
+**权限原理**（重要）：
+
+seatd 通过 **logind session** 动态授权：
+1. systemd unit 中 `PAMName=login` 为 `cam` 创建 login session（`loginctl` 可见）
+2. seatd 检测到 `cam` 是 seat0 的活跃用户，自动添加 ACL 到 `/dev/dri/card0`、`/dev/input/*`
+3. `Environment="LIBSEAT_BACKEND=seatd"` 通知 cage/wlroots 用 seatd 而非 elogind
+
+因此 `cam` **不需要**在 `video` 组——seatd 绕过了 Unix 组权限。但加入 `video` 组提供手动测试时的回退方案。
+
+> 加入组后需要**重新登录**或重启才能生效。
+
+### 3.7 为什么用 cage 而不是 X11
+
+传统做法是在 X11 桌面（或 `startx`）上运行 PyQt5。但车载场景下：
+
+- ❌ X11 拖着一个完整的桌面会话，浪费 CPU/内存
+- ❌ 需要配 `~/.xinitrc`、`DISPLAY`、`XAUTHORITY`
+
+cage + seatd 方案：
+
+- ✅ 零桌面环境，系统仅跑一个 compositor + 一个应用
+- ✅ PyQt5 直接通过 `QT_QPA_PLATFORM=wayland` 渲染
+- ✅ DRM 直接写屏，无 X11 中间层，更低延迟
+- ✅ cage 自动处理 VT 切换、全屏、屏幕旋转
+
 ---
 
 ## 4. 应用部署
@@ -135,25 +177,22 @@ pip3 install pyserial --break-system-packages
 
 ### 4.3 端口 80 权限（关键）
 
-Web 管理页面默认监听 **端口 80**（标准 HTTP 端口，无需手动输入端口号）。但 1024 以下端口在 Linux 上需要 root 权限。有三种方式：
+Web 管理页面默认监听 **端口 80**（标准 HTTP，无需输端口号）。1024 以下端口需要 `CAP_NET_BIND_SERVICE` 能力。
 
-**方式一：setcap（推荐，一次配置，无需 sudo 运行）**
+由于应用通过 systemd 以 **非 root 用户** (`cam`) 运行，权限通过 `AmbientCapabilities` 注入——**无需 sudo，无需 setcap**。
 
-```bash
-sudo setcap 'cap_net_bind_service=+ep' /usr/bin/python3
-# 如果是 venv：
-# sudo setcap 'cap_net_bind_service=+ep' /home/cam/DashCam/.venv/bin/python3
+在下面的 systemd unit 中已包含：
+
+```
+AmbientCapabilities=CAP_DAC_OVERRIDE CAP_NET_BIND_SERVICE
 ```
 
-**方式二：sudo 运行**
+| 能力 | 用途 |
+|---|---|
+| `CAP_DAC_OVERRIDE` | 允许 `sudo mount` / `chmod` 操作 U 盘 |
+| `CAP_NET_BIND_SERVICE` | 允许监听 80 端口 |
 
-```bash
-sudo python3 ~/DashCam/main.py
-```
-
-**方式三：改回高端口（不推荐，需要手动输端口号）**
-
-修改 `main.py` 中的 `port=80` 为 `port=8080`。
+> 如果手动测试（不通过 systemd），需要临时 sudo 运行或改回 `port=8080`。
 
 ### 4.4 语法检查
 
@@ -166,14 +205,27 @@ echo "语法检查通过"
 
 ### 4.5 手动启动测试
 
+**通过 cage 启动**（需要已登录的 TTY）：
+
 ```bash
 cd ~/DashCam
+# 在 tty1 上直接跑（需在 seat0 上已登录）
+sudo chmod 666 /run/seatd.sock
+cage -s -m last -- python3 main.py
+```
 
-# 不用 sudo（如果已配置 setcap）
-python3 main.py
+**通过 SSH 测试（仅验证导入 + API，无 GUI）**：
 
-# 或需要 root（端口 80 + USB 挂载）
-sudo python3 main.py
+```bash
+cd ~/DashCam
+# 端口 80 需要 root 或 CAP_NET_BIND_SERVICE
+sudo python3 -c "
+from web_server import DashcamWebServer
+s = DashcamWebServer(port=80)
+s.start()
+import time; time.sleep(60)  # 运行 60 秒供测试
+"
+# 另一个终端：curl http://127.0.0.1/api/status
 ```
 
 启动后，手机连接 `Pi-Dashcam` 热点（密码 `dashcam123`），浏览器访问 `http://192.168.x.x` 即可看到管理仪表盘。
@@ -182,30 +234,59 @@ sudo python3 main.py
 
 ## 5. 开机自启
 
-### 5.1 systemd 服务
+### 5.1 systemd 服务（cage + Wayland）
 
 创建 `/etc/systemd/system/dashcam.service`：
 
 ```ini
 [Unit]
 Description=车缘 DashCam 行车记录仪
-After=network.target network-manager.service
-Wants=network.target
+After=network.target systemd-logind.service seatd.service
+Wants=seatd.service
+Conflicts=getty@tty1.service
 
 [Service]
-Type=simple
-User=root
+User=cam
+Group=cam
+
+# 非 root 用户获得 USB 挂载 + 80 端口权限
+AmbientCapabilities=CAP_DAC_OVERRIDE CAP_NET_BIND_SERVICE
+
+# 通过 PAM 创建 login session（seatd 依赖此 session 授权 DRM/输入设备）
+PAMName=login
+
+# Wayland + seatd 环境变量
+Environment="XDG_RUNTIME_DIR=/run/user/1002"
+Environment="QT_QPA_PLATFORM=wayland"
+Environment="WLR_BACKEND=drm"
+Environment="LIBSEAT_BACKEND=seatd"
+
+# TTY 设置（接管 tty1）
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-force
+StandardOutput=journal
+StandardError=journal
+
 WorkingDirectory=/home/cam/DashCam
-ExecStartPre=/bin/sleep 5
-ExecStart=/usr/bin/python3 /home/cam/DashCam/main.py
+
+# 启动前修复 seatd socket 权限（root 执行，+ 前缀表示不作为服务的一部分校验）
+ExecStartPre=+/bin/chmod 666 /run/seatd.sock
+# cage 启动 PyQt5 应用：-s 允许 VT 切换，-m last 使用最后一个显示器
+ExecStart=/usr/bin/cage -s -m last -- /usr/bin/python3 /home/cam/DashCam/main.py
+
 Restart=always
-RestartSec=10
-Environment=DISPLAY=:0
-Environment=XAUTHORITY=/home/cam/.Xauthority
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+> **注意**：
+> - `XDG_RUNTIME_DIR` 中的 `1002` 是 `cam` 用户的 UID。用 `id -u cam` 查看实际值，按需修改。
+> - `PAMName=login` 是 seatd 授权的核心——它让 systemd 为 `cam` 创建一个完整的 login session（`loginctl` 可见），seatd 据此开放 DRM/输入设备。
 
 启用：
 
@@ -245,12 +326,15 @@ sudo journalctl -u dashcam -f  # 实时日志
 
 | 问题 | 检查点 |
 |---|---|
+| cage 黑屏/无法启动 | `journalctl -u dashcam -n 50`；确认 `/run/seatd.sock` 权限；核对 `id -u cam` 与 `XDG_RUNTIME_DIR` |
+| seatd socket 权限错误 | `sudo chmod 666 /run/seatd.sock`；确认 systemd unit 有 `ExecStartPre` |
+| DRM 权限拒绝 | `getfacl /dev/dri/card0` 确认 seatd 已加 ACL；`loginctl` 确认 `cam` 在 seat0 上有活跃 session |
 | 摄像头无画面 | `v4l2-ctl --list-devices`；确认 `/dev/video0` 存在 |
-| U 盘不挂载 | `sudo lsblk -f`；确认文件系统为 FAT32/exFAT；手动 `sudo mount /dev/sda1 /mnt/usb_sda1` |
+| U 盘不挂载 | `sudo lsblk -f`；确认文件系统为 FAT32/exFAT；`cam` 在 `plugdev` 组 |
 | GPS 无数据 | `sudo cat /dev/serial0` 看是否有 NMEA 输出；确认串口配置 |
-| 端口 80 启动失败 | `sudo setcap 'cap_net_bind_service=+ep' /usr/bin/python3` |
+| 端口 80 启动失败 | 确认 systemd unit 有 `AmbientCapabilities=... CAP_NET_BIND_SERVICE`；或临时 `sudo` 运行 |
 | 车牌识别不工作 | `python3 -c "import hyperlpr3; print(hyperlpr3.LicensePlateCatcher())"` |
-| 车机屏幕不亮 | `sudo raspi-config` → Display → 设置合适分辨率 |
+| 车机屏幕不亮 | `/boot/firmware/config.txt` 加 `hdmi_force_hotplug=1`；或 `sudo raspi-config` 设分辨率 |
 | 管理页打不开 | `curl http://127.0.0.1/api/status` 看是否有 JSON 返回；检查防火墙 `sudo iptables -L` |
 
 ---
