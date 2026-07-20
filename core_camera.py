@@ -294,6 +294,7 @@ class CameraWorker(QObject):
         self.last_log_time = 0
         
         self._restart_camera = False  # 切换参数时通知 _loop 重启摄像头
+        self._writer_lock = threading.RLock()  # 保护 video_writer 跨线程访问（可重入）
         self._pending_storage_path = None  # 待切换的目标路径
         self._frame_count = 0  # 用于周期性 USB 检测
         self._no_usb_shown = False  # 全屏 OSD 防重复
@@ -533,24 +534,12 @@ class CameraWorker(QObject):
         return res_list, fps_list
 
     def apply_video_params(self, width, height, fps):
-        """应用新的视频录制参数，由 _loop 线程安全重启摄像头"""
-        was_recording = self.is_recording
-        # 先停止当前录制（保存文件）
-        if was_recording:
-            self.stop_recording_file()
-            self.is_recording = False
-            self.recording_toggled.emit(False)
-        # 更新参数并持久化
+        """设置新参数，由 _loop 线程安全完成全部切换"""
         self.width = width
         self.height = height
         self.fps_target = fps
         self._save_video_params()
-        # 通知 _loop 线程重启摄像头（不阻塞 UI 线程）
-        self._restart_camera = True
-        # 恢复录制
-        if was_recording:
-            self.is_recording = True
-            self.recording_toggled.emit(True)
+        self._restart_camera = True  # _loop 线程处理停止录制+重启+恢复录制
 
     def _on_gps_data(self, data):
         self.gps_data = data
@@ -560,12 +549,27 @@ class CameraWorker(QObject):
             # 线程安全重启摄像头（由 apply_video_params 触发）
             if self._restart_camera:
                 self._restart_camera = False
+                was_recording = self.is_recording
+                # 1. 安全停止录制
+                self.is_recording = False
+                with self._writer_lock:
+                    if self.video_writer:
+                        self.video_writer.release()
+                        self.video_writer = None
+                        self.current_video_filename = ""
+                if was_recording:
+                    self.recording_toggled.emit(False)
+                # 2. 重启摄像头
                 if self.cap and self.cap.isOpened():
                     self.cap.release()
                 self.cap = cv2.VideoCapture(0)
                 self.cap.set(cv2.CAP_PROP_FOURCC, 1196444237)  # MJPG
                 self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
                 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                # 3. 恢复录制
+                if was_recording:
+                    self.is_recording = True
+                    self.recording_toggled.emit(True)
                 continue
             
             if self.is_playback and self.playback_file:
@@ -722,7 +726,9 @@ class CameraWorker(QObject):
 
         if self.video_writer:
             try:
-                self.video_writer.write(frame)
+                with self._writer_lock:
+                    if self.video_writer:
+                        self.video_writer.write(frame)
             except Exception:
                 # U盘拔出等写入失败：停止录制
                 print(f"⚠️ 写入失败（U盘已拔出），停止录制")
@@ -735,11 +741,12 @@ class CameraWorker(QObject):
                 self.storage_notify.emit("⚠️ U盘写入失败，已停止录制")
 
     def stop_recording_file(self):
-        if self.video_writer:
-            self.video_writer.release()
-            self.video_writer = None
-            self.current_video_filename = ""
-            print("🛑 录制底层资源已安全释放。")
+        with self._writer_lock:
+            if self.video_writer:
+                self.video_writer.release()
+                self.video_writer = None
+                self.current_video_filename = ""
+                print("🛑 录制底层资源已安全释放。")
 
     def _load_storage_config(self):
         """读取上次保存的存储路径"""
