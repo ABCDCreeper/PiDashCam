@@ -585,7 +585,6 @@ class CameraWorker(QObject):
                 continue
             
             self._frame_count += 1
-            key_frame = (self._frame_count % 2 == 0)  # 录屏和 LPR 只在关键帧执行
             current_time = time.time()
 
             # —— OSD 每帧都绘制（避免闪烁） ——
@@ -629,19 +628,18 @@ class CameraWorker(QObject):
                 elapsed = int(time.time() - self.record_start_time)
                 cv2.circle(frame, (40, 40), 12, (0, 0, 255), -1)
                 cv2.putText(frame, f"REC {elapsed}s", (60, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+                try:
+                    self._handle_recording(frame)
+                except Exception:
+                    pass
             else:
                 if self.video_writer is not None:
                     self.stop_recording_file()
                 
             cv2.putText(frame, "AI Status: ON (>0.85)", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
-            # —— 重操作只在关键帧执行 ——
-            if key_frame:
-                if self.is_recording:
-                    try:
-                        self._handle_recording(frame)
-                    except Exception:
-                        pass
+            # LPR 识别跳帧执行（节省 CPU 用于预览）
+            if self._frame_count % 3 == 0:
                 if self.lpr_catcher and not self.lpr_busy and (current_time - self.last_infer_time > 0.8):
                     small_frame = cv2.resize(frame, (self.width // 2, self.height // 2))
                     threading.Thread(target=self._lpr_task, args=(small_frame,), daemon=True).start()
