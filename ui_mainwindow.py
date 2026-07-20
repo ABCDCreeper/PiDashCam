@@ -238,6 +238,144 @@ class TimeSettingDialog(QDialog):
                 "无法设置系统时间：\n" + "\n".join(errors))
 
 
+class RecordingSettingsDialog(QDialog):
+    """全屏触控视频录制参数设置对话框"""
+    RESOLUTIONS = [
+        ("640×480", 640, 480),
+        ("1280×720", 1280, 720),
+        ("1920×1080", 1920, 1080),
+    ]
+    FPS_OPTIONS = [15, 20, 25, 30]
+
+    def __init__(self, parent=None, current_w=1280, current_h=720, current_fps=30):
+        super().__init__(parent)
+        self.setWindowTitle("视频录制参数")
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        self.setStyleSheet("background-color: #080808; color: white; font-size: 15px;")
+
+        self.selected_w = current_w
+        self.selected_h = current_h
+        self.selected_fps = current_fps
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(8)
+
+        title = QLabel("📹 视频录制参数")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("color: #00aaff; font-size: 22px; font-weight: bold; padding: 4px;")
+        layout.addWidget(title)
+
+        # 当前参数
+        self.lbl_current = QLabel()
+        self.lbl_current.setAlignment(Qt.AlignCenter)
+        self.lbl_current.setStyleSheet("color: #39ff14; font-size: 18px; font-weight: bold; padding: 4px;")
+        self._update_current_display()
+        layout.addWidget(self.lbl_current)
+
+        # 分辨率选择
+        res_label = QLabel("分辨率")
+        res_label.setStyleSheet("color: #aaa; font-size: 16px; font-weight: bold; padding: 2px;")
+        layout.addWidget(res_label)
+
+        res_row = QHBoxLayout()
+        res_row.setSpacing(8)
+        self.res_btns = {}
+        for label, w, h in self.RESOLUTIONS:
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setStyleSheet(
+                "font-size: 18px; min-height: 50px; border-radius: 6px;"
+            )
+            if w == current_w and h == current_h:
+                btn.setChecked(True)
+                btn.setStyleSheet(btn.styleSheet() + "background-color: #0073e6;")
+            btn.clicked.connect(lambda checked, ww=w, hh=h: self._select_res(ww, hh))
+            self.res_btns[(w, h)] = btn
+            res_row.addWidget(btn)
+        layout.addLayout(res_row)
+
+        # 帧率选择
+        fps_label = QLabel("帧率 (fps)")
+        fps_label.setStyleSheet("color: #aaa; font-size: 16px; font-weight: bold; padding: 2px;")
+        layout.addWidget(fps_label)
+
+        fps_row = QHBoxLayout()
+        fps_row.setSpacing(8)
+        self.fps_btns = {}
+        for fps in self.FPS_OPTIONS:
+            btn = QPushButton(str(fps))
+            btn.setCheckable(True)
+            btn.setStyleSheet(
+                "font-size: 18px; min-height: 50px; border-radius: 6px;"
+            )
+            if fps == current_fps:
+                btn.setChecked(True)
+                btn.setStyleSheet(btn.styleSheet() + "background-color: #0073e6;")
+            btn.clicked.connect(lambda checked, f=fps: self._select_fps(f))
+            self.fps_btns[fps] = btn
+            fps_row.addWidget(btn)
+        layout.addLayout(fps_row)
+
+        layout.addStretch()
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        btn_save = QPushButton("💾 保存")
+        btn_save.setStyleSheet(
+            "background-color: #0088cc; font-size: 18px; font-weight: bold; "
+            "min-height: 45px; border-radius: 6px;"
+        )
+        btn_save.clicked.connect(self.accept)
+        btn_cancel = QPushButton("❌ 取消")
+        btn_cancel.setStyleSheet(
+            "background-color: #a93226; font-size: 18px; "
+            "min-height: 45px; border-radius: 6px;"
+        )
+        btn_cancel.clicked.connect(self.reject)
+        btn_row.addWidget(btn_save)
+        btn_row.addWidget(btn_cancel)
+        layout.addLayout(btn_row)
+
+        self.showFullScreen()
+
+    def _select_res(self, w, h):
+        self.selected_w = w
+        self.selected_h = h
+        for (bw, bh), btn in self.res_btns.items():
+            if bw == w and bh == h:
+                btn.setChecked(True)
+                btn.setStyleSheet(
+                    "background-color: #0073e6; font-size: 18px; min-height: 50px; border-radius: 6px;"
+                )
+            else:
+                btn.setChecked(False)
+                btn.setStyleSheet(
+                    "font-size: 18px; min-height: 50px; border-radius: 6px;"
+                )
+        self._update_current_display()
+
+    def _select_fps(self, fps):
+        self.selected_fps = fps
+        for bfps, btn in self.fps_btns.items():
+            if bfps == fps:
+                btn.setChecked(True)
+                btn.setStyleSheet(
+                    "background-color: #0073e6; font-size: 18px; min-height: 50px; border-radius: 6px;"
+                )
+            else:
+                btn.setChecked(False)
+                btn.setStyleSheet(
+                    "font-size: 18px; min-height: 50px; border-radius: 6px;"
+                )
+        self._update_current_display()
+
+    def _update_current_display(self):
+        self.lbl_current.setText(
+            f"当前选择: {self.selected_w}×{self.selected_h} · {self.selected_fps}fps"
+        )
+
+
 class DashcamMainWindow(QMainWindow):
     # 标准跨线程信号，确保后台线程分发的 UI 通知 100% 到达且不崩溃
     osd_signal = pyqtSignal(str)
@@ -354,13 +492,27 @@ class DashcamMainWindow(QMainWindow):
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(2)
         
-        # 录制参数显示
+        # 录制参数行：参数标签 + 设置按钮
+        param_row = QHBoxLayout()
+        param_row.setSpacing(4)
+
         self.recording_params_lbl = QLabel()
         self.recording_params_lbl.setAlignment(Qt.AlignCenter)
         self.recording_params_lbl.setStyleSheet(
             "color: #888; font-size: 12px; padding: 0px;"
         )
-        layout.addWidget(self.recording_params_lbl)
+        param_row.addWidget(self.recording_params_lbl)
+
+        btn_video_settings = QPushButton("⚙")
+        btn_video_settings.setFixedSize(28, 20)
+        btn_video_settings.setStyleSheet(
+            "background-color: #1a1a1a; color: #888; font-size: 12px; "
+            "border: 1px solid #333; border-radius: 4px; min-height: 18px; padding: 0px;"
+        )
+        btn_video_settings.clicked.connect(self.open_video_settings)
+        param_row.addWidget(btn_video_settings)
+
+        layout.addLayout(param_row)
         
         # 按钮行
         btn_row = QHBoxLayout()
@@ -570,6 +722,21 @@ class DashcamMainWindow(QMainWindow):
         if self.worker.is_recording:
             base += "  ·  ● 录制中"
         self.recording_params_lbl.setText(base)
+
+    def open_video_settings(self):
+        """打开视频录制参数设置对话框"""
+        dlg = RecordingSettingsDialog(
+            self,
+            current_w=self.worker.width,
+            current_h=self.worker.height,
+            current_fps=self.worker.fps_target,
+        )
+        if dlg.exec_() == QDialog.Accepted:
+            self.worker.apply_video_params(dlg.selected_w, dlg.selected_h, dlg.selected_fps)
+            self._update_recording_params()
+            self.show_osd_message(
+                f"✅ 视频参数已更新: {dlg.selected_w}×{dlg.selected_h} @ {dlg.selected_fps}fps"
+            )
 
     def open_time_setting(self):
         dlg = TimeSettingDialog(self)

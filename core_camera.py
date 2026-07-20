@@ -442,6 +442,22 @@ class CameraWorker(QObject):
         self.gps.start()
         threading.Thread(target=self._loop, daemon=True).start()
 
+    def apply_video_params(self, width, height, fps):
+        """应用新的视频录制参数并重启摄像头"""
+        self.width = width
+        self.height = height
+        self.fps_target = fps
+        # 重启摄像头以应用新参数
+        self.running = False
+        time.sleep(0.3)
+        if self.cap and self.cap.isOpened():
+            self.cap.release()
+        self.cap = cv2.VideoCapture(0)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        self.running = True
+        threading.Thread(target=self._loop, daemon=True).start()
+
     def _on_gps_data(self, data):
         self.gps_data = data
 
