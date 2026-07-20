@@ -27,14 +27,17 @@ No unit tests, linter config, or CI. `py_compile` is the sole pre-deploy check. 
 
 ```
 main.py                 Entry point: QApplication, BlankCursor, showFullScreen
-  └─ ui_mainwindow.py    DashcamMainWindow — 3-page QStackedWidget shell
-       │                   + TimeSettingDialog (fullscreen RTC time setter)
-       ├─ core_camera.py   CameraWorker (cv2 capture → QImage signals)
-       │                   SystemUtils (lsblk USB scanner + stale-mount cleanup)
-       │                   GPSWorker (L76X NMEA 0183 parser → serial → GPS OSD)
-       ├─ ui_wifi.py       WifiScannerDialog + WifiWorker (nmcli scan + connect)
-       ├─ ui_keyboard.py   TouchKeyboard (fullscreen on-screen keyboard)
-       └─ touch_widgets.py TapSlider, TouchScrollListWidget
+  │                       + starts DashcamWebServer on port 8080
+  ├─ ui_mainwindow.py    DashcamMainWindow — 3-page QStackedWidget shell
+  │                       + TimeSettingDialog (fullscreen RTC time setter)
+  ├─ core_camera.py       CameraWorker (cv2 capture → QImage signals)
+  │                       SystemUtils (lsblk USB scanner + stale-mount cleanup)
+  │                       GPSWorker (L76X NMEA 0183 parser → serial → GPS OSD)
+  ├─ ui_wifi.py           WifiScannerDialog + WifiWorker (nmcli scan + connect)
+  ├─ ui_keyboard.py       TouchKeyboard (fullscreen on-screen keyboard)
+  ├─ touch_widgets.py     TapSlider, TouchScrollListWidget
+  └─ web_server.py        DashcamWebServer — HTTP API + 管理网页后台
+                           static/index.html — 单页管理仪表盘前端
 ```
 
 ### Component map
@@ -52,6 +55,8 @@ main.py                 Entry point: QApplication, BlankCursor, showFullScreen
 | `ui_keyboard.py` | `TouchKeyboard` | Fullscreen QWERTY + numeric keyboard with 确定/取消/退格/清空/空格 |
 | `touch_widgets.py` | `TapSlider` | Tap groove to jump (not just drag handle); only fires when click is outside handle rect |
 | `touch_widgets.py` | `TouchScrollListWidget` | 10px drag threshold to distinguish scroll from item click; proportional scroll sensitivity |
+| `web_server.py` | `DashcamWebServer` | Daemon-thread HTTP server on port 8080 with REST API (status, videos, plates, snapshot, network, recording control) and static file serving |
+| `static/index.html` | — | Single-page management dashboard: system status, video gallery + player, plate log browser, network panel |
 
 ### Data flow
 
@@ -69,12 +74,14 @@ All background work (camera, LPR, GPS serial, nmcli, disk) runs in `threading.Th
 
 ## Key Files
 
-- `main.py` — entry point (~12 lines)
-- `core_camera.py` — camera, recording, playback, USB scan + cleanup, GPS parsing, LPR, plate logging (~714 lines, heaviest)
-- `ui_mainwindow.py` — main window, OSD overlays, storage UI, GPS status, WiFi flow, time dialog, network polling (~713 lines)
+- `main.py` — entry point (~24 lines)
+- `core_camera.py` — camera, recording, playback, USB scan + cleanup, GPS parsing, LPR, plate logging (~899 lines, heaviest)
+- `ui_mainwindow.py` — main window, OSD overlays, storage UI, GPS status, WiFi flow, time dialog, network polling (~999 lines)
 - `ui_wifi.py` — WiFi scan dialog + nmcli worker (~109 lines)
 - `ui_keyboard.py` — on-screen keyboard (~73 lines)
 - `touch_widgets.py` — TapSlider + TouchScrollListWidget (~89 lines)
+- `web_server.py` — HTTP REST API server + management dashboard backend (~410 lines)
+- `static/index.html` — Web management dashboard frontend (~625 lines)
 
 Runtime data stored under `~/Videos/`: recordings, `wifi_passwords.json`, `storage_config.json`, `plates_log.json`.
 

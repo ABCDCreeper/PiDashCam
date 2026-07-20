@@ -2,3 +2,8 @@ __pycache__
 **/.codewhale/*
 !**/.codewhale/constitution.json
 .deepseek/
+*.bak
+test_*.py
+.vscode/
+~$*
+*.docx
