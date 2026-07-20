@@ -443,42 +443,71 @@ class CameraWorker(QObject):
         threading.Thread(target=self._loop, daemon=True).start()
 
     def get_camera_caps(self):
-        """查询摄像头支持的分辨率上限和帧率，返回 (res_list, fps_list)"""
-        # 尝试的常见分辨率
-        candidates = [
-            (320, 240), (640, 480), (800, 600),
-            (1024, 768), (1280, 720), (1280, 960),
-            (1920, 1080),
-        ]
-        supported = []
+        """查询摄像头支持的分辨率上限和帧率，返回 (res_list, fps_list)
+        优先使用 v4l2-ctl 精确查询，失败时回退到尝试法"""
+        import re
+        res_set = set()
+        fps_set = set()
+
+        # 方案 1：v4l2-ctl（精确，不受 OpenCV 占用影响）
         try:
-            test_cap = cv2.VideoCapture(0)
-            if not test_cap.isOpened():
-                test_cap.release()
-                return [(640, 480), (1280, 720)], [15, 20, 25, 30]
-            for w, h in candidates:
-                test_cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
-                test_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
-                actual_w = int(test_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                actual_h = int(test_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                if actual_w > 0 and actual_h > 0:
-                    supported.append((actual_w, actual_h))
-            test_cap.release()
+            result = subprocess.run(
+                ["v4l2-ctl", "--list-formats-ext"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                text = result.stdout
+                # 解析 Size: Discrete WIDTHxHEIGHT
+                for m in re.finditer(r"Size:\s*Discrete\s+(\d+)x(\d+)", text):
+                    w, h = int(m.group(1)), int(m.group(2))
+                    if w > 0 and h > 0:
+                        res_set.add((w, h))
+                # 解析 Interval ... (XX.XXX fps)
+                for m in re.finditer(r"\((\d+\.?\d*)\s*fps\)", text):
+                    fps = round(float(m.group(1)))
+                    if 1 <= fps <= 120:
+                        fps_set.add(fps)
         except Exception:
             pass
-        if not supported:
-            supported = [(640, 480), (1280, 720)]
-        # 去重并排序
-        seen = set()
-        unique = []
-        for w, h in supported:
-            key = (w, h)
-            if key not in seen:
-                seen.add(key)
-                unique.append(key)
-        unique.sort(key=lambda x: x[0] * x[1])
-        fps_options = [10, 15, 20, 25, 30]
-        return unique, fps_options
+
+        # 方案 2：回退 — 用 OpenCV 尝试常见分辨率（需释放摄像头）
+        if not res_set:
+            candidates = [
+                (320, 240), (640, 480), (800, 600),
+                (1024, 768), (1280, 720), (1280, 960),
+                (1920, 1080),
+            ]
+            # 临时暂停主循环，用工作摄像头测试
+            was_running = self.running
+            self.running = False
+            time.sleep(0.2)
+            try:
+                if self.cap and self.cap.isOpened():
+                    for w, h in candidates:
+                        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+                        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+                        aw = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                        ah = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                        if aw > 0 and ah > 0:
+                            res_set.add((aw, ah))
+                    # 恢复原参数
+                    self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+                    self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+            except Exception:
+                pass
+            self.running = was_running
+            if not self.running and self.cap:
+                threading.Thread(target=self._loop, daemon=True).start()
+
+        if not res_set:
+            res_set = {(640, 480), (1280, 720)}
+
+        if not fps_set:
+            fps_set = {10, 15, 20, 25, 30, 60}
+
+        res_list = sorted(res_set, key=lambda x: x[0] * x[1])
+        fps_list = sorted(fps_set)
+        return res_list, fps_list
 
     def apply_video_params(self, width, height, fps):
         """应用新的视频录制参数并重启摄像头"""

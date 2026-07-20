@@ -486,11 +486,10 @@ class DashcamMainWindow(QMainWindow):
         )
         param_row.addWidget(self.recording_params_lbl)
 
-        btn_video_settings = QPushButton("⚙")
-        btn_video_settings.setFixedSize(28, 20)
+        btn_video_settings = QPushButton("⚙ 视频参数")
         btn_video_settings.setStyleSheet(
-            "background-color: #1a1a1a; color: #888; font-size: 12px; "
-            "border: 1px solid #333; border-radius: 4px; min-height: 18px; padding: 0px;"
+            "background-color: #1a1a1a; color: #aaa; font-size: 13px; "
+            "border: 1px solid #444; border-radius: 4px; min-height: 22px; padding: 2px 8px;"
         )
         btn_video_settings.clicked.connect(self.open_video_settings)
         param_row.addWidget(btn_video_settings)
