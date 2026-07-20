@@ -585,66 +585,66 @@ class CameraWorker(QObject):
                 continue
             
             self._frame_count += 1
-            key_frame = (self._frame_count % 2 == 0)  # 每 2 帧做一次 OSD+录屏+LPR
+            key_frame = (self._frame_count % 2 == 0)  # 录屏和 LPR 只在关键帧执行
+            current_time = time.time()
+
+            # —— OSD 每帧都绘制（避免闪烁） ——
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.85
+            thickness_bg = 5
+            thickness_fg = 2
             
+            (text_w, text_h), _ = cv2.getTextSize(now_str, font, font_scale, thickness_bg)
+            x_pos = self.width - text_w - 20
+            y_pos = self.height - 20
+
+            gps = self.gps_data
+            if gps.get("serial_error") is None:
+                if gps.get("has_fix"):
+                    lat = gps["latitude"]
+                    lon = gps["longitude"]
+                    lat_hemi = "N" if lat >= 0 else "S"
+                    lon_hemi = "E" if lon >= 0 else "W"
+                    gps_str = f"{abs(lat):.5f}°{lat_hemi}  {abs(lon):.5f}°{lon_hemi}"
+                    gps_scale = 0.55
+                    (gw, _), _ = cv2.getTextSize(gps_str, font, gps_scale, 4)
+                    cv2.putText(frame, gps_str, (self.width - gw - 20, y_pos - 28),
+                                font, gps_scale, (0, 0, 0), 4, cv2.LINE_8)
+                    cv2.putText(frame, gps_str, (self.width - gw - 20, y_pos - 28),
+                                font, gps_scale, (255, 255, 255), 1, cv2.LINE_AA)
+                    info_str = f"{gps['satellites']} sat  {gps['speed_kmh']:.0f} km/h"
+                    cv2.putText(frame, info_str, (20, 108), font, 0.5, (0, 0, 0), 4, cv2.LINE_8)
+                    cv2.putText(frame, info_str, (20, 108), font, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
+                else:
+                    cv2.putText(frame, "GPS: No Fix", (x_pos, y_pos - 28),
+                                font, 0.5, (0, 0, 0), 4, cv2.LINE_8)
+                    cv2.putText(frame, "GPS: No Fix", (x_pos, y_pos - 28),
+                                font, 0.5, (128, 128, 128), 1, cv2.LINE_AA)
+
+            cv2.putText(frame, now_str, (x_pos, y_pos), font, font_scale, (0, 0, 0), thickness_bg, cv2.LINE_8)
+            cv2.putText(frame, now_str, (x_pos, y_pos), font, font_scale, (255, 255, 255), thickness_fg, cv2.LINE_AA)
+            
+            if self.is_recording:
+                elapsed = int(time.time() - self.record_start_time)
+                cv2.circle(frame, (40, 40), 12, (0, 0, 255), -1)
+                cv2.putText(frame, f"REC {elapsed}s", (60, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+            else:
+                if self.video_writer is not None:
+                    self.stop_recording_file()
+                
+            cv2.putText(frame, "AI Status: ON (>0.85)", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+            # —— 重操作只在关键帧执行 ——
             if key_frame:
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.85
-                thickness_bg = 5
-                thickness_fg = 2
-                
-                (text_w, text_h), _ = cv2.getTextSize(now_str, font, font_scale, thickness_bg)
-                x_pos = self.width - text_w - 20
-                y_pos = self.height - 20
-
-                # GPS 叠加
-                gps = self.gps_data
-                if gps.get("serial_error") is None:
-                    if gps.get("has_fix"):
-                        lat = gps["latitude"]
-                        lon = gps["longitude"]
-                        lat_hemi = "N" if lat >= 0 else "S"
-                        lon_hemi = "E" if lon >= 0 else "W"
-                        gps_str = f"{abs(lat):.5f}°{lat_hemi}  {abs(lon):.5f}°{lon_hemi}"
-                        gps_scale = 0.55
-                        (gw, _), _ = cv2.getTextSize(gps_str, font, gps_scale, 4)
-                        cv2.putText(frame, gps_str, (self.width - gw - 20, y_pos - 28),
-                                    font, gps_scale, (0, 0, 0), 4, cv2.LINE_8)
-                        cv2.putText(frame, gps_str, (self.width - gw - 20, y_pos - 28),
-                                    font, gps_scale, (255, 255, 255), 1, cv2.LINE_AA)
-                        info_str = f"{gps['satellites']} sat  {gps['speed_kmh']:.0f} km/h"
-                        cv2.putText(frame, info_str, (20, 108), font, 0.5, (0, 0, 0), 4, cv2.LINE_8)
-                        cv2.putText(frame, info_str, (20, 108), font, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
-                    else:
-                        cv2.putText(frame, "GPS: No Fix", (x_pos, y_pos - 28),
-                                    font, 0.5, (0, 0, 0), 4, cv2.LINE_8)
-                        cv2.putText(frame, "GPS: No Fix", (x_pos, y_pos - 28),
-                                    font, 0.5, (128, 128, 128), 1, cv2.LINE_AA)
-
-                cv2.putText(frame, now_str, (x_pos, y_pos), font, font_scale, (0, 0, 0), thickness_bg, cv2.LINE_8)
-                cv2.putText(frame, now_str, (x_pos, y_pos), font, font_scale, (255, 255, 255), thickness_fg, cv2.LINE_AA)
-                
                 if self.is_recording:
                     try:
                         self._handle_recording(frame)
                     except Exception:
                         pass
-                    elapsed = int(time.time() - self.record_start_time)
-                    cv2.circle(frame, (40, 40), 12, (0, 0, 255), -1)
-                    cv2.putText(frame, f"REC {elapsed}s", (60, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
-                else:
-                    if self.video_writer is not None:
-                        self.stop_recording_file()
-                    
-                cv2.putText(frame, "AI Status: ON (>0.85)", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                
-                current_time = time.time()
                 if self.lpr_catcher and not self.lpr_busy and (current_time - self.last_infer_time > 0.8):
                     small_frame = cv2.resize(frame, (self.width // 2, self.height // 2))
                     threading.Thread(target=self._lpr_task, args=(small_frame,), daemon=True).start()
-            else:
-                current_time = time.time()
 
             osd_text = ""
             if self.plates and (current_time - self.last_detect_time < 2.5):
