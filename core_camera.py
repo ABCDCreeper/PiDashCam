@@ -295,6 +295,7 @@ class CameraWorker(QObject):
         
         self._restart_camera = False  # 切换参数时通知 _loop 重启摄像头
         self._writer_lock = threading.RLock()  # 保护 video_writer 跨线程访问（可重入）
+        self._segment_frame_count = 0  # 当前录制段帧数计数
         self._pending_storage_path = None  # 待切换的目标路径
         self._frame_count = 0  # 用于周期性 USB 检测
         self._no_usb_shown = False  # 全屏 OSD 防重复
@@ -698,7 +699,15 @@ class CameraWorker(QObject):
             self.current_video_filename = datetime.now().strftime("REC_%Y%m%d_%H%M%S.mkv")
             filepath = os.path.join(target_path, self.current_video_filename)
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            self.video_writer = cv2.VideoWriter(filepath, fourcc, self.fps_target, (self.width, self.height))
+            # 用实际测量帧率替代声明帧率（防止录制时间漂移）
+            measured_fps = self.fps_target
+            if self._segment_frame_count > 0 and hasattr(self, '_segment_start_time'):
+                elapsed = time.time() - self._segment_start_time
+                if elapsed > 1:
+                    measured_fps = self._segment_frame_count / elapsed
+            self._segment_start_time = time.time()
+            self._segment_frame_count = 0
+            self.video_writer = cv2.VideoWriter(filepath, fourcc, measured_fps, (self.width, self.height))
             
             # 🌟 核心修复 3：检测视频文件是否真正创建成功！防止静默失败！
             if not self.video_writer.isOpened():
@@ -728,6 +737,7 @@ class CameraWorker(QObject):
                 with self._writer_lock:
                     if self.video_writer:
                         self.video_writer.write(frame)
+                        self._segment_frame_count += 1
             except Exception:
                 # U盘拔出等写入失败：停止录制
                 print(f"⚠️ 写入失败（U盘已拔出），停止录制")
