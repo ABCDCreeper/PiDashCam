@@ -611,6 +611,21 @@ class DashcamMainWindow(QMainWindow):
                         else:
                             status_str = f"🌐 Wi-Fi 已连: {name}"
                         break
+            
+            # 获取 wlan0 的 IPv4 地址
+            if "🌐" in status_str or "📡" in status_str:
+                try:
+                    ip_cmd = ["sudo", "nmcli", "-t", "-f", "IP4.ADDRESS", "device", "show", "wlan0"]
+                    ip_res = subprocess.run(ip_cmd, capture_output=True, text=True, timeout=5)
+                    for ip_line in ip_res.stdout.strip().split('\n'):
+                        if ':' in ip_line:
+                            addr = ip_line.split(':', 1)[1].split('/')[0]
+                            if addr:
+                                status_str += f"  |  IP: {addr}"
+                                break
+                except Exception:
+                    pass
+            
             self.net_status_signal.emit(status_str)
         except Exception:
             pass
