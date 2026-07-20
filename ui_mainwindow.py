@@ -1,18 +1,191 @@
 # ui_mainwindow.py
 import os
+import json
 import threading
 import subprocess
+from datetime import datetime
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QStackedWidget, QListWidget, 
-                             QListWidgetItem, QRadioButton, QButtonGroup, 
-                             QSizePolicy, QDialog)
+                             QListWidgetItem, QMessageBox,
+                             QSizePolicy, QDialog, QProgressBar)
 
 from ui_keyboard import TouchKeyboard
 from ui_wifi import WifiScannerDialog
 from touch_widgets import TapSlider, TouchScrollListWidget
 from core_camera import SystemUtils, CameraWorker
+
+
+class TimeSettingDialog(QDialog):
+    """全屏触控系统时间设置对话框（DS3231 RTC）"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("修改系统时间")
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        self.setStyleSheet("background-color: #080808; color: white; font-size: 18px;")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 15, 20, 15)
+        layout.setSpacing(12)
+
+        title = QLabel("🕐 修改系统时间")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("color: #00aaff; font-size: 30px; font-weight: bold; padding: 8px;")
+        layout.addWidget(title)
+
+        self.lbl_current = QLabel()
+        self.lbl_current.setAlignment(Qt.AlignCenter)
+        self.lbl_current.setStyleSheet(
+            "color: #39ff14; font-size: 24px; font-weight: bold; padding: 10px;"
+        )
+        layout.addWidget(self.lbl_current)
+
+        now = datetime.now()
+        self.year = now.year
+        self.month = now.month
+        self.day = now.day
+        self.hour = now.hour
+        self.minute = now.minute
+
+        self.val_labels = {}
+        self._update_current_display()
+
+        layout.addLayout(self._make_row("年", "year"))
+        layout.addLayout(self._make_row("月", "month"))
+        layout.addLayout(self._make_row("日", "day"))
+        layout.addLayout(self._make_row("时", "hour"))
+        layout.addLayout(self._make_row("分", "minute"))
+
+        layout.addStretch()
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(15)
+        btn_confirm = QPushButton("✅ 确认设置")
+        btn_confirm.setStyleSheet(
+            "background-color: #0088cc; font-size: 24px; font-weight: bold; "
+            "min-height: 65px; border-radius: 8px;"
+        )
+        btn_confirm.clicked.connect(self._confirm)
+        btn_cancel = QPushButton("❌ 取消")
+        btn_cancel.setStyleSheet(
+            "background-color: #a93226; font-size: 24px; "
+            "min-height: 65px; border-radius: 8px;"
+        )
+        btn_cancel.clicked.connect(self.reject)
+        btn_row.addWidget(btn_confirm)
+        btn_row.addWidget(btn_cancel)
+        layout.addLayout(btn_row)
+
+        self.showFullScreen()
+
+    def _update_current_display(self):
+        self.lbl_current.setText(
+            f"当前: {self.year}-{self.month:02d}-{self.day:02d} "
+            f"{self.hour:02d}:{self.minute:02d}:00"
+        )
+
+    def _make_row(self, label, field):
+        row = QHBoxLayout()
+        row.setSpacing(10)
+
+        lbl = QLabel(label)
+        lbl.setStyleSheet("color: #aaa; font-size: 24px; font-weight: bold; min-width: 60px;")
+        lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        val_lbl = QLabel()
+        val_lbl.setAlignment(Qt.AlignCenter)
+        val_lbl.setStyleSheet(
+            "color: #fff; font-size: 32px; font-weight: bold; "
+            "min-width: 130px; min-height: 60px; "
+            "background-color: #1a1a1a; border: 2px solid #333; border-radius: 8px;"
+        )
+        self.val_labels[field] = val_lbl
+        current = getattr(self, field)
+        val_lbl.setText(str(current) if field == "year" else f"{current:02d}")
+
+        btn_down = QPushButton("◀")
+        btn_down.setFixedSize(70, 70)
+        btn_down.setStyleSheet(
+            "background-color: #2c3e50; font-size: 28px; "
+            "border-radius: 35px; font-weight: bold;"
+        )
+        btn_down.clicked.connect(lambda checked, f=field: self._adjust(f, -1))
+
+        btn_up = QPushButton("▶")
+        btn_up.setFixedSize(70, 70)
+        btn_up.setStyleSheet(
+            "background-color: #2c3e50; font-size: 28px; "
+            "border-radius: 35px; font-weight: bold;"
+        )
+        btn_up.clicked.connect(lambda checked, f=field: self._adjust(f, 1))
+
+        row.addWidget(lbl)
+        row.addStretch()
+        row.addWidget(btn_down)
+        row.addWidget(val_lbl)
+        row.addWidget(btn_up)
+        row.addStretch()
+        return row
+
+    def _adjust(self, field, delta):
+        limits = {
+            "year": (2000, 2099),
+            "month": (1, 12),
+            "day": (1, 31),
+            "hour": (0, 23),
+            "minute": (0, 59),
+        }
+        current = getattr(self, field)
+        lo, hi = limits[field]
+        new_val = current + delta
+        if new_val < lo or new_val > hi:
+            return
+        setattr(self, field, new_val)
+        if field == "year":
+            self.val_labels[field].setText(str(new_val))
+        else:
+            self.val_labels[field].setText(f"{new_val:02d}")
+        self._update_current_display()
+
+    def _confirm(self):
+        try:
+            datetime(self.year, self.month, self.day, self.hour, self.minute)
+        except ValueError as e:
+            QMessageBox.warning(self, "日期无效", f"请输入合法的日期时间：\n{e}")
+            return
+
+        time_str = (
+            f"{self.year}-{self.month:02d}-{self.day:02d} "
+            f"{self.hour:02d}:{self.minute:02d}:00"
+        )
+        try:
+            res = subprocess.run(
+                ["sudo", "date", "-s", time_str],
+                capture_output=True, text=True, timeout=10
+            )
+            if res.returncode != 0:
+                QMessageBox.warning(self, "设置失败",
+                    f"无法设置系统时间：\n{res.stderr.strip()}")
+                return
+
+            res2 = subprocess.run(
+                ["sudo", "hwclock", "--systohc"],
+                capture_output=True, text=True, timeout=10
+            )
+            if res2.returncode != 0:
+                QMessageBox.warning(self, "部分成功",
+                    f"系统时间已设置，但同步 DS3231 失败：\n{res2.stderr.strip()}")
+                self.accept()
+                return
+
+            parent = self.parent()
+            if parent and hasattr(parent, "show_osd_message"):
+                parent.show_osd_message(f"✅ 时间已更新: {time_str}")
+            self.accept()
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"设置时间时发生异常：\n{e}")
+
 
 class DashcamMainWindow(QMainWindow):
     # 标准跨线程信号，确保后台线程分发的 UI 通知 100% 到达且不崩溃
@@ -146,19 +319,28 @@ class DashcamMainWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(6)
+        layout.setSpacing(8)
+        
+        # U盘空间条形图区域
+        self.storage_label = QLabel("U盘状态: 检测中...")
+        self.storage_label.setStyleSheet("color: #00aaff; font-size: 18px; font-weight: bold; padding: 5px;")
+        layout.addWidget(self.storage_label)
+        
+        self.storage_bar = QProgressBar()
+        self.storage_bar.setTextVisible(True)
+        self.storage_bar.setMinimumHeight(40)
+        self.storage_bar.setStyleSheet("""
+            QProgressBar { background-color: #222; border: 2px solid #444; border-radius: 6px; text-align: center; color: white; font-size: 16px; font-weight: bold; }
+            QProgressBar::chunk { background-color: #0073e6; border-radius: 4px; }
+        """)
+        layout.addWidget(self.storage_bar)
+        
+        self.storage_detail = QLabel("")
+        self.storage_detail.setStyleSheet("color: #aaa; font-size: 14px; padding: 2px;")
+        layout.addWidget(self.storage_detail)
         
         row1 = QHBoxLayout()
-        self.storage_layout = QHBoxLayout()
-        row1.addLayout(self.storage_layout, stretch=4)
-        btn_rescan_storage = QPushButton("🔄 刷新")
-        btn_rescan_storage.setFixedWidth(100)
-        btn_rescan_storage.clicked.connect(self.refresh_storage_ui)
-        row1.addWidget(btn_rescan_storage, stretch=1)
-        layout.addLayout(row1)
-        
-        row2 = QHBoxLayout()
-        row2.setSpacing(10)
+        row1.setSpacing(10)
         btn_ap = QPushButton("📡 开启车载热点")
         btn_ap.clicked.connect(self.start_ap_flow)
         
@@ -168,11 +350,19 @@ class DashcamMainWindow(QMainWindow):
         btn_back = QPushButton("⬅ 返回主界面")
         btn_back.clicked.connect(lambda: self.stack.setCurrentIndex(0))
         
-        row2.addWidget(btn_ap)
-        row2.addWidget(btn_client)
-        row2.addWidget(btn_back)
-        layout.addLayout(row2)
-        
+        row1.addWidget(btn_ap)
+        row1.addWidget(btn_client)
+        row1.addWidget(btn_back)
+        layout.addLayout(row1)
+
+        row_time = QHBoxLayout()
+        row_time.setSpacing(10)
+        btn_time = QPushButton("🕐 修改系统时间")
+        btn_time.clicked.connect(self.open_time_setting)
+        row_time.addWidget(btn_time)
+        row_time.addStretch()
+        layout.addLayout(row_time)
+
         self.refresh_storage_ui()
         return page
 
@@ -233,32 +423,38 @@ class DashcamMainWindow(QMainWindow):
             self.btn_record.setStyleSheet("background-color: #1b4f72; font-size: 20px;")
 
     def refresh_storage_ui(self):
-        while self.storage_layout.count():
-            item = self.storage_layout.takeAt(0)
-            if item.widget(): item.widget().deleteLater()
-            
-        self.storage_group = QButtonGroup(self)
+        """更新 U 盘空间条形图"""
         devices = SystemUtils.get_storage_devices()
+        if not devices:
+            self.storage_label.setText("⚠️ 未检测到U盘")
+            self.storage_bar.setValue(0)
+            self.storage_bar.setFormat("无U盘")
+            self.storage_bar.setStyleSheet("""
+                QProgressBar { background-color: #222; border: 2px solid #922b21; border-radius: 6px; text-align: center; color: #ff4444; font-size: 16px; font-weight: bold; }
+                QProgressBar::chunk { background-color: #922b21; border-radius: 4px; }
+            """)
+            self.storage_detail.setText("请插入U盘开始录制")
+            return
         
-        for i, dev in enumerate(devices):
-            btn = QRadioButton(f"{dev['name']} ({dev['free_gb']}G)")
-            self.storage_group.addButton(btn, i)
-            self.storage_layout.addWidget(btn)
-            if dev["path"] == self.worker.storage_path:
-                btn.setChecked(True)
-                
-        if not self.storage_group.checkedButton() and self.storage_layout.count() > 0:
-            self.storage_layout.itemAt(0).widget().setChecked(True)
-        self.storage_group.buttonClicked.connect(self.change_storage_path)
+        dev = devices[0]  # 只有一个 U 盘
+        total_gb = round(dev["free_gb"] / (1 - dev["percent"] / 100), 1) if dev["percent"] > 0 else dev["free_gb"]
+        used_gb = round(total_gb - dev["free_gb"], 1)
+        pct = int(dev["percent"])
+        
+        self.storage_label.setText(f"🔌 {dev['name']}")
+        self.storage_bar.setMinimum(0)
+        self.storage_bar.setMaximum(100)
+        self.storage_bar.setValue(pct)
+        self.storage_bar.setFormat(f"已用 {pct}%")
+        self.storage_bar.setStyleSheet("""
+            QProgressBar { background-color: #222; border: 2px solid #444; border-radius: 6px; text-align: center; color: white; font-size: 16px; font-weight: bold; }
+            QProgressBar::chunk { background-color: #0073e6; border-radius: 4px; }
+        """)
+        self.storage_detail.setText(f"🟦 已用 {used_gb}G  |  🟩 剩余 {dev['free_gb']}G  |  总计 {total_gb}G")
 
     def change_storage_path(self, btn):
-        idx = self.storage_group.id(btn)
-        devices = SystemUtils.get_storage_devices()
-        if idx < len(devices):
-            new_path = devices[idx]["path"]
-            # 🌟 核心修复：不直接给变量赋值，而是调用专职切盘方法！
-            self.worker.switch_storage_path(new_path)
-            self.show_osd_message(f"✅ 存储路径已实时切换至:\n{new_path}\n当前录像已无缝迁移！")
+        # 不再需要手动切换，U 盘自动检测
+        pass
 
     def on_storage_notify(self, msg):
         """接收后台线程的存储切换结果通知（成功/失败）"""
@@ -277,6 +473,10 @@ class DashcamMainWindow(QMainWindow):
         else:
             self.btn_record.setText("● 开始录像")
             self.btn_record.setStyleSheet("background-color: #1b4f72; font-size: 20px;")
+
+    def open_time_setting(self):
+        dlg = TimeSettingDialog(self)
+        dlg.exec_()
 
     def open_playback_page(self):
         self.list_videos.clear()
