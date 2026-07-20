@@ -296,6 +296,8 @@ class CameraWorker(QObject):
         self._restart_camera = False  # 切换参数时通知 _loop 重启摄像头
         self._writer_lock = threading.RLock()  # 保护 video_writer 跨线程访问（可重入）
         self._segment_frame_count = 0  # 当前录制段帧数计数
+        self._total_recorded_frames = 0  # 累计录制帧数
+        self._recording_start_time = 0.0  # 录制开始墙钟时间
         self._pending_storage_path = None  # 待切换的目标路径
         self._frame_count = 0  # 用于周期性 USB 检测
         self._no_usb_shown = False  # 全屏 OSD 防重复
@@ -699,14 +701,8 @@ class CameraWorker(QObject):
             self.current_video_filename = datetime.now().strftime("REC_%Y%m%d_%H%M%S.mkv")
             filepath = os.path.join(target_path, self.current_video_filename)
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            # 用实际测量帧率替代声明帧率（防止录制时间漂移）
-            measured_fps = self.fps_target
-            if self._segment_frame_count > 0 and hasattr(self, '_segment_start_time'):
-                elapsed = time.time() - self._segment_start_time
-                if elapsed > 1:
-                    measured_fps = self._segment_frame_count / elapsed
-            self._segment_start_time = time.time()
-            self._segment_frame_count = 0
+            # 用实时测量帧率创建 VideoWriter（1080p 软件编码 ~8-15fps）
+            measured_fps = max(8.0, self._get_measured_fps())
             self.video_writer = cv2.VideoWriter(filepath, fourcc, measured_fps, (self.width, self.height))
             
             # 🌟 核心修复 3：检测视频文件是否真正创建成功！防止静默失败！
@@ -738,6 +734,9 @@ class CameraWorker(QObject):
                     if self.video_writer:
                         self.video_writer.write(frame)
                         self._segment_frame_count += 1
+                        self._total_recorded_frames += 1
+                        if self._recording_start_time == 0:
+                            self._recording_start_time = time.time()
             except Exception:
                 # U盘拔出等写入失败：停止录制
                 print(f"⚠️ 写入失败（U盘已拔出），停止录制")
@@ -748,6 +747,14 @@ class CameraWorker(QObject):
                 self.is_recording = False
                 self._no_usb_shown = False
                 self.storage_notify.emit("⚠️ U盘写入失败，已停止录制")
+
+    def _get_measured_fps(self):
+        """返回持续测量的实际录制帧率（基于墙钟时间）"""
+        if self._total_recorded_frames > 60 and self._recording_start_time > 0:
+            elapsed = time.time() - self._recording_start_time
+            if elapsed > 2:
+                return self._total_recorded_frames / elapsed
+        return self.fps_target
 
     def stop_recording_file(self):
         with self._writer_lock:
