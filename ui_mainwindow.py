@@ -9,7 +9,7 @@ from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QStackedWidget, QListWidget, 
                              QListWidgetItem, QMessageBox,
-                             QSizePolicy, QDialog, QProgressBar)
+                             QSizePolicy, QDialog, QProgressBar, QFrame)
 
 from ui_keyboard import TouchKeyboard
 from ui_wifi import WifiScannerDialog
@@ -322,17 +322,28 @@ class DashcamMainWindow(QMainWindow):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(8)
         
-        # 顶部行：U盘空间统计（左）+ GPS 状态（右）水平排列
-        row_top = QHBoxLayout()
-        row_top.setSpacing(10)
+        # 统一状态面板（U盘 + GPS 集成在一个容器内）
+        status_frame = QFrame()
+        status_frame.setStyleSheet("QFrame { background-color: #111; border: 2px solid #333; border-radius: 8px; }")
+        status_layout = QVBoxLayout(status_frame)
+        status_layout.setContentsMargins(10, 8, 10, 8)
+        status_layout.setSpacing(4)
         
-        # 左侧：U盘空间统计（垂直排列）
-        storage_vbox = QVBoxLayout()
-        storage_vbox.setSpacing(4)
+        # 标题行：U盘标签（左）+ GPS 状态（右）
+        header_row = QHBoxLayout()
+        header_row.setSpacing(10)
         
         self.storage_label = QLabel("U盘状态: 检测中...")
-        self.storage_label.setStyleSheet("color: #00aaff; font-size: 18px; font-weight: bold; padding: 5px;")
-        storage_vbox.addWidget(self.storage_label)
+        self.storage_label.setStyleSheet("color: #00aaff; font-size: 18px; font-weight: bold; padding: 5px; border: none;")
+        header_row.addWidget(self.storage_label)
+        
+        header_row.addStretch()
+        
+        self.gps_status_lbl = QLabel("🛰 GPS: 检测中...")
+        self.gps_status_lbl.setStyleSheet("color: #888; font-size: 16px; padding: 5px; border: none;")
+        header_row.addWidget(self.gps_status_lbl)
+        
+        status_layout.addLayout(header_row)
         
         self.storage_bar = QProgressBar()
         self.storage_bar.setTextVisible(True)
@@ -341,25 +352,23 @@ class DashcamMainWindow(QMainWindow):
             QProgressBar { background-color: #222; border: 2px solid #444; border-radius: 6px; text-align: center; color: white; font-size: 16px; font-weight: bold; }
             QProgressBar::chunk { background-color: #0073e6; border-radius: 4px; }
         """)
-        storage_vbox.addWidget(self.storage_bar)
+        status_layout.addWidget(self.storage_bar)
         
         self.storage_detail = QLabel("")
-        self.storage_detail.setStyleSheet("color: #aaa; font-size: 14px; padding: 2px;")
-        storage_vbox.addWidget(self.storage_detail)
+        self.storage_detail.setStyleSheet("color: #aaa; font-size: 14px; padding: 2px; border: none;")
+        status_layout.addWidget(self.storage_detail)
         
-        row_top.addLayout(storage_vbox, stretch=6)
-        
-        # 右侧：GPS 状态
-        self.gps_status_lbl = QLabel("🛰 GPS: 检测中...")
-        self.gps_status_lbl.setStyleSheet("color: #888; font-size: 16px; padding: 5px;")
-        self.gps_status_lbl.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        row_top.addWidget(self.gps_status_lbl, stretch=4)
-        
-        layout.addLayout(row_top)
+        layout.addWidget(status_frame)
 
-        # 中间行：热点、WiFi、修改系统时间
+        # 控制栏：返回（左）+ 热点、WiFi、修改时间
         row1 = QHBoxLayout()
         row1.setSpacing(10)
+        
+        btn_back = QPushButton("⬅")
+        btn_back.setFixedWidth(70)
+        btn_back.setStyleSheet("font-size: 22px;")
+        btn_back.clicked.connect(lambda: self.stack.setCurrentIndex(0))
+        
         btn_ap = QPushButton("📡 开启车载热点")
         btn_ap.clicked.connect(self.start_ap_flow)
         
@@ -369,21 +378,11 @@ class DashcamMainWindow(QMainWindow):
         btn_time = QPushButton("🕐 修改系统时间")
         btn_time.clicked.connect(self.open_time_setting)
         
+        row1.addWidget(btn_back)
         row1.addWidget(btn_ap)
         row1.addWidget(btn_client)
         row1.addWidget(btn_time)
         layout.addLayout(row1)
-
-        # 底部行：返回主界面（图标化）
-        row_back = QHBoxLayout()
-        row_back.setSpacing(10)
-        row_back.addStretch()
-        btn_back = QPushButton("⬅")
-        btn_back.setFixedWidth(80)
-        btn_back.setStyleSheet("font-size: 24px;")
-        btn_back.clicked.connect(lambda: self.stack.setCurrentIndex(0))
-        row_back.addWidget(btn_back)
-        layout.addLayout(row_back)
 
         self.refresh_storage_ui()
         return page
