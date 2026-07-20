@@ -653,9 +653,11 @@ class CameraWorker(QObject):
                     x1, y1, x2, y2 = [v * 2 for v in plate_box]
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
                     parts.append(f"📷 {plate_text} ({plate_conf:.2f})")
-                osd_text = "  ".join(parts)
+                osd_text = "\n".join(parts)
             
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # 预览帧缩小至 1/4 像素（640×360 @ 1080p），大幅减少 QImage 开销
+            preview_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5, interpolation=cv2.INTER_LINEAR)
+            rgb_frame = cv2.cvtColor(preview_frame, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb_frame.shape
             q_img = QImage(rgb_frame.data, w, h, ch * w, QImage.Format_RGB888).copy()
             
