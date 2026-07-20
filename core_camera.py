@@ -526,11 +526,18 @@ class CameraWorker(QObject):
         return res_list, fps_list
 
     def apply_video_params(self, width, height, fps):
-        """应用新的视频录制参数并重启摄像头"""
+        """应用新的视频录制参数并重启摄像头，自动恢复录制状态"""
+        was_recording = self.is_recording
+        # 先停止当前录制（保存文件）
+        if was_recording:
+            self.stop_recording_file()
+            self.is_recording = False
+            self.recording_toggled.emit(False)
+        # 更新参数
         self.width = width
         self.height = height
         self.fps_target = fps
-        # 重启摄像头以应用新参数
+        # 重启摄像头
         self.running = False
         time.sleep(0.3)
         if self.cap and self.cap.isOpened():
@@ -541,6 +548,11 @@ class CameraWorker(QObject):
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         self.running = True
         threading.Thread(target=self._loop, daemon=True).start()
+        # 恢复录制
+        if was_recording:
+            time.sleep(1.0)  # 等待新摄像头就绪
+            self.is_recording = True
+            self.recording_toggled.emit(True)
 
     def _on_gps_data(self, data):
         self.gps_data = data
