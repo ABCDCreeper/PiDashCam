@@ -471,7 +471,7 @@ async function loadVideos(){
         </div>
         <div class="v-actions">
           <button class="btn btn-primary btn-sm" onclick="playVideo('${escapeHtml(v.filename)}')">▶ 播放</button>
-          <a class="btn btn-outline btn-sm" href="${API_BASE}/api/videos/${encodeURIComponent(v.filename)}?download=1" download>📥 下载</a>
+          <button class="btn btn-outline btn-sm" onclick="downloadVideo('${escapeHtml(v.filename)}')">📥 下载</button>
           <button class="btn btn-danger btn-sm" onclick="deleteVideo('${escapeHtml(v.filename)}')">🗑️</button>
         </div>
       </div>
@@ -510,6 +510,29 @@ async function deleteVideo(filename){
     loadVideos();
   } catch(e) {
     toast('❌ 删除失败');
+  }
+}
+
+async function downloadVideo(filename){
+  const url = API_BASE + '/api/videos/' + encodeURIComponent(filename) + '?download=1';
+  try {
+    // 方案 1: fetch + Blob（支持进度显示，适用于桌面和 Android）
+    const resp = await fetch(url);
+    if(!resp.ok){ toast('❌ 下载失败: ' + resp.status); return; }
+    const blob = await resp.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(blobUrl);
+    toast('📥 开始下载: ' + filename);
+  } catch(e){
+    // 方案 2: fallback — 新标签页打开（iOS Safari 兼容）
+    toast('💡 正在打开下载...');
+    window.open(url, '_blank');
   }
 }
 
