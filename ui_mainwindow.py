@@ -286,7 +286,8 @@ class RecordingSettingsDialog(QDialog):
         res_label = QLabel("分辨率")
         res_label.setStyleSheet("color: #aaa; font-size: 15px; font-weight: bold; padding: 2px;")
         layout.addWidget(res_label)
-        layout.addLayout(self._make_button_grid(res_list, "res", current_w, current_h))
+        res_opts = [(f"{w}×{h}", (w, h)) for w, h in res_list]
+        layout.addLayout(self._make_button_grid(res_opts, "res", current_w, current_h))
 
         # 帧率按钮
         fps_label = QLabel("帧率 (fps)")

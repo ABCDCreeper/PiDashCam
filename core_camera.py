@@ -280,8 +280,8 @@ class CameraWorker(QObject):
         self.new_playback_file = None  
         self.storage_path = ""  # 初始为空，等 U 盘检测
         self.fps_target = 30
-        self.width = 1280
-        self.height = 720
+        self.width = 1920
+        self.height = 1080
         self.video_writer = None
         self.record_start_time = 0
         self.current_video_filename = ""
