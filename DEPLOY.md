@@ -54,7 +54,7 @@ ssh cam@192.168.x.x
 sudo apt update && sudo apt upgrade -y
 sudo apt install -y git python3-pip python3-pyqt5 python3-opencv \
                     python3-psutil network-manager v4l-utils i2c-tools \
-                    cage seatd ffmpeg
+                    cage seatd ffmpeg acl libcap2-bin
 ```
 
 | 包 | 作用 |
@@ -62,6 +62,8 @@ sudo apt install -y git python3-pip python3-pyqt5 python3-opencv \
 | `cage` | Wayland kiosk compositor，让 PyQt5 直接在 Wayland 上全屏，无需桌面环境 |
 | `seatd` | 最小化 seat 管理守护进程，为 cage 提供 DRM/输入设备访问 |
 | `ffmpeg` | 视频转封装——Web 管理页播放时 MKV→MP4 实时转换（仅改容器，CPU 极低） |
+| `acl` | `getfacl` 命令，调试 DRM 设备权限（故障排查用） |
+| `libcap2-bin` | `getcap`/`setcap` 命令，调试 Linux capabilities（故障排查用） |
 
 ### 3.2 启用 I2C / 串口 / 摄像头
 
@@ -318,6 +320,8 @@ sudo journalctl -u dashcam -f  # 实时日志
 - [ ] 车牌识别可在画面中标注车牌
 - [ ] 手机连 `Pi-Dashcam` 热点后浏览器访问 `http://<IP>` 可打开管理页面
 - [ ] 管理页面可查看系统状态、视频列表、车牌日志
+- [ ] 管理页面可在线播放视频（需 ffmpeg 已安装）
+- [ ] 管理页面可下载视频文件
 - [ ] 断电重启后时间不丢失（DS3231 正常）
 - [ ] WiFi 连接功能正常（扫描 → 输入密码 → 连接成功）
 
@@ -337,6 +341,8 @@ sudo journalctl -u dashcam -f  # 实时日志
 | 车牌识别不工作 | `python3 -c "import hyperlpr3; print(hyperlpr3.LicensePlateCatcher())"` |
 | 车机屏幕不亮 | `/boot/firmware/config.txt` 加 `hdmi_force_hotplug=1`；或 `sudo raspi-config` 设分辨率 |
 | 管理页打不开 | `curl http://127.0.0.1/api/status` 看是否有 JSON 返回；检查防火墙 `sudo iptables -L` |
+| 视频在线播放失败 | `which ffmpeg` 确认已安装；`ffmpeg -i 文件.mkv -c copy -f mp4 /dev/null` 测试转封装是否正常 |
+| 视频下载无响应 | 确认 systemd unit 有 `CAP_NET_BIND_SERVICE`；检查 U 盘路径权限 `ls -la /mnt/usb_*/` |
 
 ---
 
