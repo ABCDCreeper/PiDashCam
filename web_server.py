@@ -2,7 +2,7 @@
 """轻量级 HTTP 服务器 + REST API，零额外依赖（仅 Python 标准库 + OpenCV）。
 
 通过热点 (Pi-Dashcam) 或 WiFi 客户端模式连接后，
-浏览器访问 http://<树莓派IP>:8080 即可查看和管理行车记录仪。
+浏览器访问 http://<树莓派IP> 即可查看和管理行车记录仪。
 """
 
 import os
@@ -674,7 +674,7 @@ class DashcamWebServer:
     零额外 pip 依赖，仅使用 Python 标准库 + OpenCV（快照功能）。
     """
 
-    def __init__(self, camera_worker=None, port=8080, host="0.0.0.0"):
+    def __init__(self, camera_worker=None, port=80, host="0.0.0.0"):
         self.port = port
         self.host = host
         self.camera_worker = camera_worker

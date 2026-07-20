@@ -12,8 +12,8 @@ if __name__ == "__main__":
     window = DashcamMainWindow()
     window.showFullScreen()
 
-    # 启动管理网页服务器（端口 8080，零额外依赖）
-    web_server = DashcamWebServer(camera_worker=window.worker, port=8080)
+    # 启动管理网页服务器（端口 80，需 root 或 setcap 授权）
+    web_server = DashcamWebServer(camera_worker=window.worker, port=80)
     web_url = web_server.start()
     # 延迟显示管理地址（等 OSD 系统就绪）
     QTimer.singleShot(2000, lambda: window.show_osd_message(

@@ -27,7 +27,7 @@ No unit tests, linter config, or CI. `py_compile` is the sole pre-deploy check. 
 
 ```
 main.py                 Entry point: QApplication, BlankCursor, showFullScreen
-  │                       + starts DashcamWebServer on port 8080
+  │                       + starts DashcamWebServer on port 80
   ├─ ui_mainwindow.py    DashcamMainWindow — 3-page QStackedWidget shell
   │                       + TimeSettingDialog (fullscreen RTC time setter)
   ├─ core_camera.py       CameraWorker (cv2 capture → QImage signals)
@@ -55,7 +55,7 @@ main.py                 Entry point: QApplication, BlankCursor, showFullScreen
 | `ui_keyboard.py` | `TouchKeyboard` | Fullscreen QWERTY + numeric keyboard with 确定/取消/退格/清空/空格 |
 | `touch_widgets.py` | `TapSlider` | Tap groove to jump (not just drag handle); only fires when click is outside handle rect |
 | `touch_widgets.py` | `TouchScrollListWidget` | 10px drag threshold to distinguish scroll from item click; proportional scroll sensitivity |
-| `web_server.py` | `DashcamWebServer` | Daemon-thread HTTP server on port 8080 with REST API (status, videos, plates, snapshot, network, recording control) and static file serving |
+| `web_server.py` | `DashcamWebServer` | Daemon-thread HTTP server on port 80 with REST API (status, videos, plates, snapshot, network, recording control) and static file serving |
 | `static/index.html` | — | Single-page management dashboard: system status, video gallery + player, plate log browser, network panel |
 
 ### Data flow

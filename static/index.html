@@ -576,7 +576,7 @@ async function loadNetwork(){
       ${data.ssid ? '<div>📶 <b>WiFi SSID</b>：' + escapeHtml(data.ssid) + '</div>' : ''}
       <div>🌍 <b>IP 地址</b>：<code style="background:rgba(0,115,230,0.15);padding:2px 8px;border-radius:4px;font-size:15px">${data.ip}</code></div>
       <div style="margin-top:8px;padding:8px;background:rgba(0,115,230,0.08);border-radius:8px">
-        📱 <b>管理地址</b>：<a href="http://${data.ip}:8080" style="color:var(--title)" target="_blank">http://${data.ip}:8080</a>
+        📱 <b>管理地址</b>：<a href="http://${data.ip}" style="color:var(--title)" target="_blank">http://${data.ip}</a>
       </div>
     `;
   } catch(e) {}
