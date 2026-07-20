@@ -303,6 +303,12 @@ class CameraWorker(QObject):
             self.storage_path = saved
             print(f"📂 已恢复存储位置: {saved}")
         
+        # 恢复用户手动设置的视频参数
+        vp = self._load_video_params()
+        if vp:
+            self.width = vp.get("width", self.width)
+            self.height = vp.get("height", self.height)
+            self.fps_target = vp.get("fps", self.fps_target)
         # 启动时检测 U 盘：有则自动切换
         self._auto_select_usb()
         
@@ -533,10 +539,11 @@ class CameraWorker(QObject):
             self.stop_recording_file()
             self.is_recording = False
             self.recording_toggled.emit(False)
-        # 更新参数
+        # 更新参数并持久化
         self.width = width
         self.height = height
         self.fps_target = fps
+        self._save_video_params()
         # 重启摄像头
         self.running = False
         time.sleep(0.3)
@@ -751,6 +758,31 @@ class CameraWorker(QObject):
             os.makedirs(os.path.dirname(cfg), exist_ok=True)
             with open(cfg, "w", encoding="utf-8") as f:
                 json.dump({"storage_path": path}, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _load_video_params(self):
+        """读取用户手动设置并保存的视频参数"""
+        cfg = os.path.join(os.path.expanduser("~/Videos"), "video_params.json")
+        try:
+            if os.path.exists(cfg):
+                with open(cfg, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    def _save_video_params(self):
+        """持久化用户手动设置的视频参数"""
+        cfg = os.path.join(os.path.expanduser("~/Videos"), "video_params.json")
+        try:
+            os.makedirs(os.path.dirname(cfg), exist_ok=True)
+            with open(cfg, "w", encoding="utf-8") as f:
+                json.dump({
+                    "width": self.width,
+                    "height": self.height,
+                    "fps": self.fps_target
+                }, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
             
