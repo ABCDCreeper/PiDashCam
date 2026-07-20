@@ -51,11 +51,20 @@ class TimeSettingDialog(QDialog):
 
         self.val_labels = {}
 
-        layout.addLayout(self._make_row("年", "year"))
-        layout.addLayout(self._make_row("月", "month"))
-        layout.addLayout(self._make_row("日", "day"))
-        layout.addLayout(self._make_row("时", "hour"))
-        layout.addLayout(self._make_row("分", "minute"))
+        # 第一行：年 月 日
+        row_date = QHBoxLayout()
+        row_date.setSpacing(3)
+        self._add_field(row_date, "年", "year")
+        self._add_field(row_date, "月", "month")
+        self._add_field(row_date, "日", "day")
+        layout.addLayout(row_date)
+
+        # 第二行：时 分
+        row_time = QHBoxLayout()
+        row_time.setSpacing(3)
+        self._add_field(row_time, "时", "hour")
+        self._add_field(row_time, "分", "minute")
+        layout.addLayout(row_time)
 
         layout.addStretch()
 
@@ -93,48 +102,43 @@ class TimeSettingDialog(QDialog):
             f"{now.hour:02d}:{now.minute:02d}:{now.second:02d}"
         )
 
-    def _make_row(self, label, field):
-        row = QHBoxLayout()
-        row.setSpacing(6)
-
-        lbl = QLabel(label)
-        lbl.setStyleSheet("color: #aaa; font-size: 18px; font-weight: bold; min-width: 40px;")
-        lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    def _add_field(self, parent_layout, label, field):
+        """紧凑地将一个时间字段控件组添加到父布局中：[◀][值][▶][标签]"""
+        btn_down = QPushButton("◀")
+        btn_down.setFixedSize(44, 44)
+        btn_down.setStyleSheet(
+            "background-color: #2c3e50; font-size: 20px; "
+            "border-radius: 22px; font-weight: bold;"
+        )
+        btn_down.clicked.connect(lambda checked, f=field: self._adjust(f, -1))
 
         val_lbl = QLabel()
         val_lbl.setAlignment(Qt.AlignCenter)
         val_lbl.setStyleSheet(
-            "color: #fff; font-size: 22px; font-weight: bold; "
-            "min-width: 100px; min-height: 44px; "
+            "color: #fff; font-size: 20px; font-weight: bold; "
+            "min-width: 72px; min-height: 42px; "
             "background-color: #1a1a1a; border: 2px solid #333; border-radius: 6px;"
         )
         self.val_labels[field] = val_lbl
         current = getattr(self, field)
         val_lbl.setText(str(current) if field == "year" else f"{current:02d}")
 
-        btn_down = QPushButton("◀")
-        btn_down.setFixedSize(50, 50)
-        btn_down.setStyleSheet(
-            "background-color: #2c3e50; font-size: 22px; "
-            "border-radius: 25px; font-weight: bold;"
-        )
-        btn_down.clicked.connect(lambda checked, f=field: self._adjust(f, -1))
-
         btn_up = QPushButton("▶")
-        btn_up.setFixedSize(50, 50)
+        btn_up.setFixedSize(44, 44)
         btn_up.setStyleSheet(
-            "background-color: #2c3e50; font-size: 22px; "
-            "border-radius: 25px; font-weight: bold;"
+            "background-color: #2c3e50; font-size: 20px; "
+            "border-radius: 22px; font-weight: bold;"
         )
         btn_up.clicked.connect(lambda checked, f=field: self._adjust(f, 1))
 
-        row.addWidget(lbl)
-        row.addStretch()
-        row.addWidget(btn_down)
-        row.addWidget(val_lbl)
-        row.addWidget(btn_up)
-        row.addStretch()
-        return row
+        lbl = QLabel(label)
+        lbl.setStyleSheet("color: #aaa; font-size: 16px; font-weight: bold; min-width: 24px;")
+        lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        parent_layout.addWidget(btn_down)
+        parent_layout.addWidget(val_lbl)
+        parent_layout.addWidget(btn_up)
+        parent_layout.addWidget(lbl)
 
     def _adjust(self, field, delta):
         limits = {
