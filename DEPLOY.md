@@ -54,13 +54,14 @@ ssh cam@192.168.x.x
 sudo apt update && sudo apt upgrade -y
 sudo apt install -y git python3-pip python3-pyqt5 python3-opencv \
                     python3-psutil network-manager v4l-utils i2c-tools \
-                    cage seatd
+                    cage seatd ffmpeg
 ```
 
 | 包 | 作用 |
 |---|---|
 | `cage` | Wayland kiosk compositor，让 PyQt5 直接在 Wayland 上全屏，无需桌面环境 |
 | `seatd` | 最小化 seat 管理守护进程，为 cage 提供 DRM/输入设备访问 |
+| `ffmpeg` | 视频转封装——Web 管理页播放时 MKV→MP4 实时转换（仅改容器，CPU 极低） |
 
 ### 3.2 启用 I2C / 串口 / 摄像头
 
