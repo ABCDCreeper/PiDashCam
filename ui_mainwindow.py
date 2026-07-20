@@ -345,11 +345,26 @@ class DashcamMainWindow(QMainWindow):
         self.page_playback = self.create_playback_page()
         self.stack.addWidget(self.page_playback)
 
+        # 初始显示录制参数
+        self._update_recording_params()
+
     def create_main_page(self):
         page = QWidget()
-        layout = QHBoxLayout(page)
-        layout.setContentsMargins(4, 3, 4, 3)
-        layout.setSpacing(8)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(2)
+        
+        # 录制参数显示
+        self.recording_params_lbl = QLabel()
+        self.recording_params_lbl.setAlignment(Qt.AlignCenter)
+        self.recording_params_lbl.setStyleSheet(
+            "color: #888; font-size: 12px; padding: 0px;"
+        )
+        layout.addWidget(self.recording_params_lbl)
+        
+        # 按钮行
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
         
         self.btn_record = QPushButton("● 开始录像")
         self.btn_record.setCheckable(True)
@@ -362,9 +377,10 @@ class DashcamMainWindow(QMainWindow):
         btn_playback = QPushButton("📂 视频回放")
         btn_playback.clicked.connect(self.open_playback_page)
         
-        layout.addWidget(self.btn_record, stretch=4)
-        layout.addWidget(btn_settings, stretch=3)
-        layout.addWidget(btn_playback, stretch=3)
+        btn_row.addWidget(self.btn_record, stretch=4)
+        btn_row.addWidget(btn_settings, stretch=3)
+        btn_row.addWidget(btn_playback, stretch=3)
+        layout.addLayout(btn_row)
         return page
 
     def create_settings_page(self):
@@ -545,6 +561,15 @@ class DashcamMainWindow(QMainWindow):
         else:
             self.btn_record.setText("● 开始录像")
             self.btn_record.setStyleSheet("background-color: #1b4f72; font-size: 20px;")
+        self._update_recording_params()
+
+    def _update_recording_params(self):
+        """更新首页录制参数标签"""
+        w, h, fps = self.worker.width, self.worker.height, self.worker.fps_target
+        base = f"📹 {w}×{h} · {fps}fps"
+        if self.worker.is_recording:
+            base += "  ·  ● 录制中"
+        self.recording_params_lbl.setText(base)
 
     def open_time_setting(self):
         dlg = TimeSettingDialog(self)
