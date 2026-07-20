@@ -459,25 +459,30 @@ class CameraWorker(QObject):
             )
             if result.returncode == 0:
                 text = result.stdout
-                current_w, current_h = 0, 0
-                # 逐行解析：Size: Discrete 后紧跟 Interval，关联处理
+                current_w, current_h, current_max_fps = 0, 0, 0
+
+                def _flush_res():
+                    nonlocal current_w, current_h, current_max_fps
+                    if current_w > 0 and current_max_fps >= 10:
+                        res_set.add((current_w, current_h))
+                    current_w, current_h, current_max_fps = 0, 0, 0
+
                 for line in text.split('\n'):
                     m_size = re.match(r"\s*Size:\s*Discrete\s+(\d+)x(\d+)", line)
                     if m_size:
+                        _flush_res()  # 保存上一个分辨率（如果 fps 够高）
                         w, h = int(m_size.group(1)), int(m_size.group(2))
-                        # 只接受合理视频分辨率 (80~2592)，过滤 Sensor 拍照分辨率
                         if 80 <= w <= 2592 and 60 <= h <= 1944:
                             current_w, current_h = w, h
-                            res_set.add((w, h))
-                        else:
-                            current_w, current_h = 0, 0
                         continue
-                    # Interval 必须紧跟有效的 Size 行
                     m_int = re.match(r"\s*Interval:\s*Discrete\s+\S+\s+\((\d+\.?\d*)\s*fps\)", line)
                     if m_int and current_w > 0:
                         fps = round(float(m_int.group(1)))
+                        if fps > current_max_fps:
+                            current_max_fps = fps
                         if 1 <= fps <= 120:
                             fps_set.add(fps)
+                _flush_res()  # 最后一个分辨率
         except Exception:
             pass
 
