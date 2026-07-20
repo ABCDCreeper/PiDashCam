@@ -229,6 +229,64 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
                 self.wfile.write(data)
                 remaining -= len(data)
 
+    def _send_transmuxed_video(self, filepath):
+        """用 ffmpeg 将 MKV 实时转封装为 MP4 流式输出（浏览器兼容）
+
+        ffmpeg -c copy 不重新编码，仅改容器，CPU 开销极低。
+        降级：ffmpeg 不可用时回退到原始 MKV。
+        """
+        ffmpeg_bin = "/usr/bin/ffmpeg"
+        if not os.path.exists(ffmpeg_bin):
+            # 降级：直接发送 MKV（不转封装）
+            print("⚠️ ffmpeg 未安装，回退到原始 MKV 流")
+            self._send_file(filepath, content_type="video/x-matroska")
+            return
+
+        try:
+            # -c copy: 不重新编码，只改容器格式
+            # -f mp4: 输出 MP4
+            # -movflags frag_keyframe+empty_moov: 碎片化 MP4，适合流式传输
+            proc = subprocess.Popen(
+                [ffmpeg_bin, "-i", filepath, "-c", "copy",
+                 "-f", "mp4", "-movflags", "frag_keyframe+empty_moov",
+                 "-nostdin", "-loglevel", "error", "pipe:1"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            print(f"❌ ffmpeg 启动失败: {e}")
+            self._send_error_json("视频转码启动失败", 500)
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Accept-Ranges", "none")  # 管道输出不支持 Range
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        try:
+            chunk_size = 131072  # 128KB
+            while True:
+                chunk = proc.stdout.read(chunk_size)
+                if not chunk:
+                    break
+                try:
+                    self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    break  # 客户端断开
+
+            proc.stdout.close()
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+        finally:
+            try:
+                proc.kill()
+                proc.wait(timeout=3)
+            except Exception:
+                pass
+
     def _serve_static(self, path):
         """提供静态文件服务"""
         # 安全检查：防止目录穿越
@@ -455,11 +513,18 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
 
         # 支持 ?download=1 强制下载
         download = params.get("download", ["0"])[0]
-        dn = safe_name if download == "1" else None
 
-        self._send_file(filepath,
-            content_type="video/x-matroska" if safe_name.endswith(".mkv") else "video/mp4",
-            download_name=dn)
+        if download == "1":
+            # 下载模式：发送原始 MKV 文件
+            self._send_file(filepath,
+                content_type="video/x-matroska" if safe_name.endswith(".mkv") else "video/mp4",
+                download_name=safe_name)
+        elif safe_name.endswith(".mkv"):
+            # 播放模式 + MKV → 用 ffmpeg 实时转封装为 MP4（浏览器不原生支持 MKV）
+            self._send_transmuxed_video(filepath)
+        else:
+            # 播放模式 + 非 MKV → 直接发送
+            self._send_file(filepath, content_type="video/mp4")
 
     def _handle_plates(self, params):
         worker = self.camera_worker
