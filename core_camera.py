@@ -293,6 +293,7 @@ class CameraWorker(QObject):
         self.last_infer_time = 0
         self.last_log_time = 0
         
+        self._restart_camera = False  # 切换参数时通知 _loop 重启摄像头
         self._pending_storage_path = None  # 待切换的目标路径
         self._frame_count = 0  # 用于周期性 USB 检测
         self._no_usb_shown = False  # 全屏 OSD 防重复
@@ -532,7 +533,7 @@ class CameraWorker(QObject):
         return res_list, fps_list
 
     def apply_video_params(self, width, height, fps):
-        """应用新的视频录制参数并重启摄像头，自动恢复录制状态"""
+        """应用新的视频录制参数，由 _loop 线程安全重启摄像头"""
         was_recording = self.is_recording
         # 先停止当前录制（保存文件）
         if was_recording:
@@ -544,20 +545,10 @@ class CameraWorker(QObject):
         self.height = height
         self.fps_target = fps
         self._save_video_params()
-        # 重启摄像头
-        self.running = False
-        time.sleep(0.3)
-        if self.cap and self.cap.isOpened():
-            self.cap.release()
-        self.cap = cv2.VideoCapture(0)
-        self.cap.set(cv2.CAP_PROP_FOURCC, 1196444237)  # MJPG
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-        self.running = True
-        threading.Thread(target=self._loop, daemon=True).start()
+        # 通知 _loop 线程重启摄像头（不阻塞 UI 线程）
+        self._restart_camera = True
         # 恢复录制
         if was_recording:
-            time.sleep(1.0)  # 等待新摄像头就绪
             self.is_recording = True
             self.recording_toggled.emit(True)
 
@@ -566,6 +557,17 @@ class CameraWorker(QObject):
 
     def _loop(self):
         while self.running:
+            # 线程安全重启摄像头（由 apply_video_params 触发）
+            if self._restart_camera:
+                self._restart_camera = False
+                if self.cap and self.cap.isOpened():
+                    self.cap.release()
+                self.cap = cv2.VideoCapture(0)
+                self.cap.set(cv2.CAP_PROP_FOURCC, 1196444237)  # MJPG
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                continue
+            
             if self.is_playback and self.playback_file:
                 self._run_playback()
                 continue
