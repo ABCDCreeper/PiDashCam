@@ -257,7 +257,7 @@ class DashcamMainWindow(QMainWindow):
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setStyleSheet("background-color: #000; font-size: 20px;")
         self.video_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-        main_layout.addWidget(self.video_label, stretch=7)
+        main_layout.addWidget(self.video_label, stretch=8)
         
         # 画面左侧“网络连接状态栏” (修改定位到左下角)
         self.net_status_lbl = QLabel("🌐 网络: 查询中...", self.video_label)
@@ -285,7 +285,7 @@ class DashcamMainWindow(QMainWindow):
         self.no_usb_lbl.hide()
 
         self.stack = QStackedWidget()
-        main_layout.addWidget(self.stack, stretch=3)
+        main_layout.addWidget(self.stack, stretch=2)
 
         self.page_main = self.create_main_page()
         self.stack.addWidget(self.page_main)
@@ -297,8 +297,8 @@ class DashcamMainWindow(QMainWindow):
     def create_main_page(self):
         page = QWidget()
         layout = QHBoxLayout(page)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(10)
+        layout.setContentsMargins(4, 3, 4, 3)
+        layout.setSpacing(8)
         
         self.btn_record = QPushButton("● 开始录像")
         self.btn_record.setCheckable(True)
@@ -322,10 +322,17 @@ class DashcamMainWindow(QMainWindow):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(8)
         
-        # U盘空间条形图区域
+        # 顶部行：U盘空间统计（左）+ GPS 状态（右）水平排列
+        row_top = QHBoxLayout()
+        row_top.setSpacing(10)
+        
+        # 左侧：U盘空间统计（垂直排列）
+        storage_vbox = QVBoxLayout()
+        storage_vbox.setSpacing(4)
+        
         self.storage_label = QLabel("U盘状态: 检测中...")
         self.storage_label.setStyleSheet("color: #00aaff; font-size: 18px; font-weight: bold; padding: 5px;")
-        layout.addWidget(self.storage_label)
+        storage_vbox.addWidget(self.storage_label)
         
         self.storage_bar = QProgressBar()
         self.storage_bar.setTextVisible(True)
@@ -334,16 +341,23 @@ class DashcamMainWindow(QMainWindow):
             QProgressBar { background-color: #222; border: 2px solid #444; border-radius: 6px; text-align: center; color: white; font-size: 16px; font-weight: bold; }
             QProgressBar::chunk { background-color: #0073e6; border-radius: 4px; }
         """)
-        layout.addWidget(self.storage_bar)
+        storage_vbox.addWidget(self.storage_bar)
         
         self.storage_detail = QLabel("")
         self.storage_detail.setStyleSheet("color: #aaa; font-size: 14px; padding: 2px;")
-        layout.addWidget(self.storage_detail)
-
+        storage_vbox.addWidget(self.storage_detail)
+        
+        row_top.addLayout(storage_vbox, stretch=6)
+        
+        # 右侧：GPS 状态
         self.gps_status_lbl = QLabel("🛰 GPS: 检测中...")
         self.gps_status_lbl.setStyleSheet("color: #888; font-size: 16px; padding: 5px;")
-        layout.addWidget(self.gps_status_lbl)
+        self.gps_status_lbl.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        row_top.addWidget(self.gps_status_lbl, stretch=4)
+        
+        layout.addLayout(row_top)
 
+        # 中间行：热点、WiFi、修改系统时间
         row1 = QHBoxLayout()
         row1.setSpacing(10)
         btn_ap = QPushButton("📡 开启车载热点")
@@ -352,21 +366,24 @@ class DashcamMainWindow(QMainWindow):
         btn_client = QPushButton("🌐 连接 Wi-Fi")
         btn_client.clicked.connect(self.start_wifi_connection_flow)
         
-        btn_back = QPushButton("⬅ 返回主界面")
-        btn_back.clicked.connect(lambda: self.stack.setCurrentIndex(0))
+        btn_time = QPushButton("🕐 修改系统时间")
+        btn_time.clicked.connect(self.open_time_setting)
         
         row1.addWidget(btn_ap)
         row1.addWidget(btn_client)
-        row1.addWidget(btn_back)
+        row1.addWidget(btn_time)
         layout.addLayout(row1)
 
-        row_time = QHBoxLayout()
-        row_time.setSpacing(10)
-        btn_time = QPushButton("🕐 修改系统时间")
-        btn_time.clicked.connect(self.open_time_setting)
-        row_time.addWidget(btn_time)
-        row_time.addStretch()
-        layout.addLayout(row_time)
+        # 底部行：返回主界面（图标化）
+        row_back = QHBoxLayout()
+        row_back.setSpacing(10)
+        row_back.addStretch()
+        btn_back = QPushButton("⬅")
+        btn_back.setFixedWidth(80)
+        btn_back.setStyleSheet("font-size: 24px;")
+        btn_back.clicked.connect(lambda: self.stack.setCurrentIndex(0))
+        row_back.addWidget(btn_back)
+        layout.addLayout(row_back)
 
         self.refresh_storage_ui()
         return page
@@ -446,7 +463,7 @@ class DashcamMainWindow(QMainWindow):
         used_gb = round(total_gb - dev["free_gb"], 1)
         pct = int(dev["percent"])
         
-        self.storage_label.setText(f"🔌 {dev['name']}")
+        self.storage_label.setText("U盘状态")
         self.storage_bar.setMinimum(0)
         self.storage_bar.setMaximum(100)
         self.storage_bar.setValue(pct)
