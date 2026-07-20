@@ -10,6 +10,151 @@ from datetime import datetime
 from PyQt5.QtCore import pyqtSignal, QObject
 from PyQt5.QtGui import QImage
 
+try:
+    import serial
+    SERIAL_AVAILABLE = True
+except ImportError:
+    SERIAL_AVAILABLE = False
+    serial = None
+
+
+class GPSWorker(QObject):
+    """L76X GPS 模块后台读取线程 — 解析 NMEA 0183 语句，通过信号输出定位数据。
+    
+    微雪 L76X 默认波特率 9600，GPIO 串口 /dev/serial0。
+    NMEA 语句: $GPRMC (经纬度+速度), $GPGGA (卫星数+定位质量)。
+    """
+    gps_data_updated = pyqtSignal(dict)
+
+    def __init__(self, port="/dev/serial0", baudrate=9600):
+        super().__init__()
+        self.port = port
+        self.baudrate = baudrate
+        self.running = False
+        self._serial = None
+
+        # 最新解析数据
+        self.latitude = 0.0
+        self.longitude = 0.0
+        self.speed_kmh = 0.0
+        self.satellites = 0
+        self.has_fix = False
+        self.fix_quality = 0
+        self.last_update = 0.0
+        self.serial_error = None  # None=正常, str=错误信息
+
+    def start(self):
+        if not SERIAL_AVAILABLE:
+            self.serial_error = "pyserial 未安装"
+            self._emit_empty()
+            return
+        self.running = True
+        threading.Thread(target=self._read_loop, daemon=True).start()
+
+    def _read_loop(self):
+        try:
+            self._serial = serial.Serial(self.port, self.baudrate, timeout=0.5)
+        except Exception as e:
+            self.serial_error = f"串口打开失败: {e}"
+            self._emit_empty()
+            return
+
+        buf = ""
+        while self.running:
+            try:
+                waiting = self._serial.in_waiting or 1
+                chunk = self._serial.read(waiting).decode("ascii", errors="ignore")
+                buf += chunk
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    self._parse_nmea(line.strip())
+            except Exception:
+                time.sleep(0.5)
+        if self._serial:
+            self._serial.close()
+
+    def _parse_nmea(self, sentence):
+        if not sentence.startswith("$"):
+            return
+        if "*" in sentence:
+            sentence, _ = sentence.split("*", 1)
+        parts = sentence.split(",")
+        talker = parts[0]
+        try:
+            if talker.endswith("RMC"):
+                self._parse_rmc(parts)
+            elif talker.endswith("GGA"):
+                self._parse_gga(parts)
+        except Exception:
+            pass
+
+    def _parse_rmc(self, parts):
+        if len(parts) < 10:
+            return
+        if parts[2] != "A":
+            self.has_fix = False
+            self._emit_update()
+            return
+
+        lat_str, lat_dir = parts[3], parts[4]
+        if lat_str and lat_dir and len(lat_str) >= 4:
+            lat = float(lat_str[:2]) + float(lat_str[2:]) / 60.0
+            if lat_dir == "S":
+                lat = -lat
+            self.latitude = lat
+
+        lon_str, lon_dir = parts[5], parts[6]
+        if lon_str and lon_dir and len(lon_str) >= 5:
+            lon = float(lon_str[:3]) + float(lon_str[3:]) / 60.0
+            if lon_dir == "W":
+                lon = -lon
+            self.longitude = lon
+
+        speed_str = parts[7]
+        if speed_str:
+            self.speed_kmh = float(speed_str) * 1.852
+
+        self.has_fix = True
+        self.last_update = time.time()
+        self._emit_update()
+
+    def _parse_gga(self, parts):
+        if len(parts) < 8:
+            return
+        quality = parts[6]
+        if quality:
+            self.fix_quality = int(quality)
+        sat_str = parts[7]
+        if sat_str:
+            self.satellites = int(sat_str)
+        if self.fix_quality == 0:
+            self.has_fix = False
+        self._emit_update()
+
+    def _emit_update(self):
+        self.gps_data_updated.emit({
+            "latitude": self.latitude,
+            "longitude": self.longitude,
+            "speed_kmh": self.speed_kmh,
+            "satellites": self.satellites,
+            "has_fix": self.has_fix,
+            "fix_quality": self.fix_quality,
+            "serial_error": self.serial_error,
+        })
+
+    def _emit_empty(self):
+        self.gps_data_updated.emit({
+            "latitude": 0.0, "longitude": 0.0, "speed_kmh": 0.0,
+            "satellites": 0, "has_fix": False, "fix_quality": 0,
+            "serial_error": self.serial_error,
+        })
+
+    def stop(self):
+        self.running = False
+        if self._serial:
+            self._serial.close()
+
+
 class SystemUtils:
     @staticmethod
     def get_storage_devices():
@@ -163,6 +308,11 @@ class CameraWorker(QObject):
         # 启动时检测 U 盘：有则自动切换
         self._auto_select_usb()
         
+        # GPS 模块（微雪 L76X，GPIO 串口）
+        self.gps = GPSWorker()
+        self.gps_data = {"has_fix": False, "serial_error": None}
+        self.gps.gps_data_updated.connect(self._on_gps_data)
+
         threading.Thread(target=self._load_lpr_model, daemon=True).start()
 
     def switch_storage_path(self, new_path):
@@ -287,7 +437,11 @@ class CameraWorker(QObject):
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         self.running = True
+        self.gps.start()
         threading.Thread(target=self._loop, daemon=True).start()
+
+    def _on_gps_data(self, data):
+        self.gps_data = data
 
     def _loop(self):
         while self.running:
@@ -314,7 +468,32 @@ class CameraWorker(QObject):
             (text_w, text_h), _ = cv2.getTextSize(now_str, font, font_scale, thickness_bg)
             x_pos = self.width - text_w - 20
             y_pos = self.height - 20
-            
+
+            # GPS 叠加：仅在串口正常时显示（无硬件则完全不显示）
+            gps = self.gps_data
+            if gps.get("serial_error") is None:
+                if gps.get("has_fix"):
+                    lat = gps["latitude"]
+                    lon = gps["longitude"]
+                    lat_hemi = "N" if lat >= 0 else "S"
+                    lon_hemi = "E" if lon >= 0 else "W"
+                    gps_str = f"{abs(lat):.5f}°{lat_hemi}  {abs(lon):.5f}°{lon_hemi}"
+                    gps_scale = 0.55
+                    (gw, _), _ = cv2.getTextSize(gps_str, font, gps_scale, 4)
+                    cv2.putText(frame, gps_str, (self.width - gw - 20, y_pos - 28),
+                                font, gps_scale, (0, 0, 0), 4, cv2.LINE_8)
+                    cv2.putText(frame, gps_str, (self.width - gw - 20, y_pos - 28),
+                                font, gps_scale, (255, 255, 255), 1, cv2.LINE_AA)
+                    # 左上角：卫星 + 速度
+                    info_str = f"{gps['satellites']} sat  {gps['speed_kmh']:.0f} km/h"
+                    cv2.putText(frame, info_str, (20, 108), font, 0.5, (0, 0, 0), 4, cv2.LINE_8)
+                    cv2.putText(frame, info_str, (20, 108), font, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
+                else:
+                    cv2.putText(frame, "GPS: No Fix", (x_pos, y_pos - 28),
+                                font, 0.5, (0, 0, 0), 4, cv2.LINE_8)
+                    cv2.putText(frame, "GPS: No Fix", (x_pos, y_pos - 28),
+                                font, 0.5, (128, 128, 128), 1, cv2.LINE_AA)
+
             # 🌟 核心突破：第一步画黑框使用 cv2.LINE_8！绝对不给它生成灰色过度像素的机会！
             cv2.putText(frame, now_str, (x_pos, y_pos), font, font_scale, (0, 0, 0), thickness_bg, cv2.LINE_8)
             # 第二步画白芯使用 cv2.LINE_AA！保留文字本身内部弧度的圆润感！
@@ -531,4 +710,5 @@ class CameraWorker(QObject):
         self.running = False
         self.is_recording = False
         self.stop_recording_file()
+        self.gps.stop()
         if self.cap: self.cap.release()

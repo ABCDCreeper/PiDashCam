@@ -223,6 +223,7 @@ class DashcamMainWindow(QMainWindow):
         self.worker.storage_notify.connect(self.on_storage_notify)
         self.worker.storage_path_changed.connect(self.on_storage_path_changed)
         self.worker.recording_toggled.connect(self.on_recording_toggled)
+        self.worker.gps.gps_data_updated.connect(self.update_gps_status)
         self.worker.start_camera()
 
         self.init_ui()
@@ -338,7 +339,11 @@ class DashcamMainWindow(QMainWindow):
         self.storage_detail = QLabel("")
         self.storage_detail.setStyleSheet("color: #aaa; font-size: 14px; padding: 2px;")
         layout.addWidget(self.storage_detail)
-        
+
+        self.gps_status_lbl = QLabel("🛰 GPS: 检测中...")
+        self.gps_status_lbl.setStyleSheet("color: #888; font-size: 16px; padding: 5px;")
+        layout.addWidget(self.gps_status_lbl)
+
         row1 = QHBoxLayout()
         row1.setSpacing(10)
         btn_ap = QPushButton("📡 开启车载热点")
@@ -567,6 +572,23 @@ class DashcamMainWindow(QMainWindow):
     def update_network_lbl(self, text):
         self.net_status_lbl.setText(text)
         self.net_status_lbl.adjustSize()
+
+    def update_gps_status(self, data):
+        if not hasattr(self, "gps_status_lbl"):
+            return
+        err = data.get("serial_error")
+        if err:
+            self.gps_status_lbl.setText(f"🛰 GPS: 未连接 ({err})")
+            self.gps_status_lbl.setStyleSheet("color: #ff4444; font-size: 16px; padding: 5px;")
+        elif data.get("has_fix"):
+            self.gps_status_lbl.setText(
+                f"🛰 GPS: {data['satellites']}颗卫星  |  {data['speed_kmh']:.0f} km/h  |  "
+                f"{data['latitude']:.5f}°  {data['longitude']:.5f}°"
+            )
+            self.gps_status_lbl.setStyleSheet("color: #00ff66; font-size: 16px; padding: 5px;")
+        else:
+            self.gps_status_lbl.setText("🛰 GPS: 等待定位...")
+            self.gps_status_lbl.setStyleSheet("color: #ffaa00; font-size: 16px; padding: 5px;")
 
     def poll_network_status(self):
         """后台轮询 NetworkManager 当前活动连接"""
