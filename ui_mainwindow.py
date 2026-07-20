@@ -913,8 +913,18 @@ class DashcamMainWindow(QMainWindow):
         self.osd_signal.emit(msg)
         self.poll_network_status()
 
-    # 🌟 新增：读取和保存 Wi-Fi 密码的辅助方法
+    # 🌟 新增：读取和保存 Wi-Fi 密码的辅助方法（优先 U 盘）
     def load_saved_wifi(self):
+        # 优先从 U 盘读取
+        if self.worker.storage_path:
+            path = os.path.join(self.worker.storage_path, "wifi_passwords.json")
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        return json.load(f)
+                except Exception:
+                    pass
+        # 回退到系统盘
         path = os.path.expanduser("~/Videos/wifi_passwords.json")
         if os.path.exists(path):
             try:
@@ -925,7 +935,11 @@ class DashcamMainWindow(QMainWindow):
         return {}
 
     def save_wifi_password(self, ssid, password):
-        path = os.path.expanduser("~/Videos/wifi_passwords.json")
+        # 保存到 U 盘
+        if self.worker.storage_path:
+            path = os.path.join(self.worker.storage_path, "wifi_passwords.json")
+        else:
+            path = os.path.expanduser("~/Videos/wifi_passwords.json")
         saved = self.load_saved_wifi()
         saved[ssid] = password
         try:

@@ -762,7 +762,17 @@ class CameraWorker(QObject):
             pass
 
     def _load_video_params(self):
-        """读取用户手动设置并保存的视频参数"""
+        """读取用户手动设置并保存的视频参数（优先 U 盘）"""
+        # 优先从 U 盘读取
+        if self.storage_path:
+            cfg = os.path.join(self.storage_path, "video_params.json")
+            try:
+                if os.path.exists(cfg):
+                    with open(cfg, "r", encoding="utf-8") as f:
+                        return json.load(f)
+            except Exception:
+                pass
+        # 回退到系统盘
         cfg = os.path.join(os.path.expanduser("~/Videos"), "video_params.json")
         try:
             if os.path.exists(cfg):
@@ -773,10 +783,11 @@ class CameraWorker(QObject):
         return {}
 
     def _save_video_params(self):
-        """持久化用户手动设置的视频参数"""
-        cfg = os.path.join(os.path.expanduser("~/Videos"), "video_params.json")
+        """持久化用户手动设置的视频参数到 U 盘"""
+        if not self.storage_path:
+            return
+        cfg = os.path.join(self.storage_path, "video_params.json")
         try:
-            os.makedirs(os.path.dirname(cfg), exist_ok=True)
             with open(cfg, "w", encoding="utf-8") as f:
                 json.dump({
                     "width": self.width,
