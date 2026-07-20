@@ -661,11 +661,11 @@ class CameraWorker(QObject):
             
             self.frame_ready.emit(q_img, osd_text)
             
-            # 每 3 秒检测一次 U 盘热插拔（~180 帧 @60fps 实际）
-            if self._frame_count % 180 == 0:
+            # 每 3 秒检测一次 U 盘热插拔
+            if self._frame_count % (self.fps_target * 3) == 0:
                 self._auto_select_usb()
             
-            time.sleep(0.003)  # 最小让出 CPU，不限制帧率
+            time.sleep(1.0 / self.fps_target)
                 
     def _handle_recording(self, frame):
         # 未检测到 U 盘（且无待切换路径）：停止录制
