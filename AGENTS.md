@@ -75,7 +75,6 @@ All background work (camera, LPR, GPS serial, nmcli, disk) runs in `threading.Th
 - `ui_wifi.py` — WiFi scan dialog + nmcli worker (~109 lines)
 - `ui_keyboard.py` — on-screen keyboard (~73 lines)
 - `touch_widgets.py` — TapSlider + TouchScrollListWidget (~89 lines)
-- `~/.vscode/sftp.json` — SFTP deploy config to target device
 
 Runtime data stored under `~/Videos/`: recordings, `wifi_passwords.json`, `storage_config.json`, `plates_log.json`.
 
