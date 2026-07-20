@@ -8,7 +8,7 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QStackedWidget, QListWidget, 
-                             QListWidgetItem, QMessageBox,
+                             QListWidgetItem, QMessageBox, QComboBox,
                              QSizePolicy, QDialog, QProgressBar, QFrame)
 
 from ui_keyboard import TouchKeyboard
@@ -239,83 +239,88 @@ class TimeSettingDialog(QDialog):
 
 
 class RecordingSettingsDialog(QDialog):
-    """全屏触控视频录制参数设置对话框"""
-    RESOLUTIONS = [
-        ("640×480", 640, 480),
-        ("1280×720", 1280, 720),
-        ("1920×1080", 1920, 1080),
-    ]
-    FPS_OPTIONS = [15, 20, 25, 30]
+    """全屏触控视频录制参数设置对话框（根据摄像头实际能力动态生成）"""
+    COMBO_STYLE = """
+        QComboBox {
+            font-size: 20px; min-height: 55px; padding: 6px 12px;
+            background-color: #1a1a1a; border: 2px solid #444;
+            border-radius: 8px; color: white; font-weight: bold;
+        }
+        QComboBox::drop-down {
+            border: none; width: 50px;
+        }
+        QComboBox::down-arrow {
+            image: none;
+        }
+        QComboBox QAbstractItemView {
+            font-size: 20px; min-height: 50px;
+            background-color: #1a1a1a; color: white;
+            selection-background-color: #0073e6;
+            outline: none;
+        }
+    """
 
-    def __init__(self, parent=None, current_w=1280, current_h=720, current_fps=30):
+    def __init__(self, parent=None, current_w=1280, current_h=720, current_fps=30,
+                 res_list=None, fps_list=None):
         super().__init__(parent)
         self.setWindowTitle("视频录制参数")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
         self.setStyleSheet("background-color: #080808; color: white; font-size: 15px;")
+
+        if res_list is None:
+            res_list = [(640, 480), (1280, 720)]
+        if fps_list is None:
+            fps_list = [15, 20, 25, 30]
 
         self.selected_w = current_w
         self.selected_h = current_h
         self.selected_fps = current_fps
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(15, 12, 15, 12)
+        layout.setSpacing(12)
 
         title = QLabel("📹 视频录制参数")
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet("color: #00aaff; font-size: 22px; font-weight: bold; padding: 4px;")
         layout.addWidget(title)
 
-        # 当前参数
         self.lbl_current = QLabel()
         self.lbl_current.setAlignment(Qt.AlignCenter)
         self.lbl_current.setStyleSheet("color: #39ff14; font-size: 18px; font-weight: bold; padding: 4px;")
         self._update_current_display()
         layout.addWidget(self.lbl_current)
 
-        # 分辨率选择
+        # 分辨率下拉框
         res_label = QLabel("分辨率")
         res_label.setStyleSheet("color: #aaa; font-size: 16px; font-weight: bold; padding: 2px;")
         layout.addWidget(res_label)
 
-        res_row = QHBoxLayout()
-        res_row.setSpacing(8)
-        self.res_btns = {}
-        for label, w, h in self.RESOLUTIONS:
-            btn = QPushButton(label)
-            btn.setCheckable(True)
-            btn.setStyleSheet(
-                "font-size: 18px; min-height: 50px; border-radius: 6px;"
-            )
+        self.cmb_res = QComboBox()
+        self.cmb_res.setStyleSheet(self.COMBO_STYLE)
+        self.res_map = {}
+        for w, h in res_list:
+            label = f"{w}×{h}"
+            self.cmb_res.addItem(label)
+            self.res_map[self.cmb_res.count() - 1] = (w, h)
             if w == current_w and h == current_h:
-                btn.setChecked(True)
-                btn.setStyleSheet(btn.styleSheet() + "background-color: #0073e6;")
-            btn.clicked.connect(lambda checked, ww=w, hh=h: self._select_res(ww, hh))
-            self.res_btns[(w, h)] = btn
-            res_row.addWidget(btn)
-        layout.addLayout(res_row)
+                self.cmb_res.setCurrentIndex(self.cmb_res.count() - 1)
+        self.cmb_res.currentIndexChanged.connect(self._on_res_changed)
+        layout.addWidget(self.cmb_res)
 
-        # 帧率选择
+        # 帧率下拉框
         fps_label = QLabel("帧率 (fps)")
         fps_label.setStyleSheet("color: #aaa; font-size: 16px; font-weight: bold; padding: 2px;")
         layout.addWidget(fps_label)
 
-        fps_row = QHBoxLayout()
-        fps_row.setSpacing(8)
-        self.fps_btns = {}
-        for fps in self.FPS_OPTIONS:
-            btn = QPushButton(str(fps))
-            btn.setCheckable(True)
-            btn.setStyleSheet(
-                "font-size: 18px; min-height: 50px; border-radius: 6px;"
-            )
+        self.cmb_fps = QComboBox()
+        self.cmb_fps.setStyleSheet(self.COMBO_STYLE)
+        for fps in fps_list:
+            self.cmb_fps.addItem(str(fps), fps)
             if fps == current_fps:
-                btn.setChecked(True)
-                btn.setStyleSheet(btn.styleSheet() + "background-color: #0073e6;")
-            btn.clicked.connect(lambda checked, f=fps: self._select_fps(f))
-            self.fps_btns[fps] = btn
-            fps_row.addWidget(btn)
-        layout.addLayout(fps_row)
+                self.cmb_fps.setCurrentIndex(self.cmb_fps.count() - 1)
+        self.cmb_fps.currentIndexChanged.connect(self._on_fps_changed)
+        layout.addWidget(self.cmb_fps)
 
         layout.addStretch()
 
@@ -339,35 +344,13 @@ class RecordingSettingsDialog(QDialog):
 
         self.showFullScreen()
 
-    def _select_res(self, w, h):
-        self.selected_w = w
-        self.selected_h = h
-        for (bw, bh), btn in self.res_btns.items():
-            if bw == w and bh == h:
-                btn.setChecked(True)
-                btn.setStyleSheet(
-                    "background-color: #0073e6; font-size: 18px; min-height: 50px; border-radius: 6px;"
-                )
-            else:
-                btn.setChecked(False)
-                btn.setStyleSheet(
-                    "font-size: 18px; min-height: 50px; border-radius: 6px;"
-                )
-        self._update_current_display()
+    def _on_res_changed(self, idx):
+        if idx in self.res_map:
+            self.selected_w, self.selected_h = self.res_map[idx]
+            self._update_current_display()
 
-    def _select_fps(self, fps):
-        self.selected_fps = fps
-        for bfps, btn in self.fps_btns.items():
-            if bfps == fps:
-                btn.setChecked(True)
-                btn.setStyleSheet(
-                    "background-color: #0073e6; font-size: 18px; min-height: 50px; border-radius: 6px;"
-                )
-            else:
-                btn.setChecked(False)
-                btn.setStyleSheet(
-                    "font-size: 18px; min-height: 50px; border-radius: 6px;"
-                )
+    def _on_fps_changed(self, idx):
+        self.selected_fps = self.cmb_fps.currentData()
         self._update_current_display()
 
     def _update_current_display(self):
@@ -725,11 +708,14 @@ class DashcamMainWindow(QMainWindow):
 
     def open_video_settings(self):
         """打开视频录制参数设置对话框"""
+        res_list, fps_list = self.worker.get_camera_caps()
         dlg = RecordingSettingsDialog(
             self,
             current_w=self.worker.width,
             current_h=self.worker.height,
             current_fps=self.worker.fps_target,
+            res_list=res_list,
+            fps_list=fps_list,
         )
         if dlg.exec_() == QDialog.Accepted:
             self.worker.apply_video_params(dlg.selected_w, dlg.selected_h, dlg.selected_fps)

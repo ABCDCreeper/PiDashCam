@@ -442,6 +442,44 @@ class CameraWorker(QObject):
         self.gps.start()
         threading.Thread(target=self._loop, daemon=True).start()
 
+    def get_camera_caps(self):
+        """查询摄像头支持的分辨率上限和帧率，返回 (res_list, fps_list)"""
+        # 尝试的常见分辨率
+        candidates = [
+            (320, 240), (640, 480), (800, 600),
+            (1024, 768), (1280, 720), (1280, 960),
+            (1920, 1080),
+        ]
+        supported = []
+        try:
+            test_cap = cv2.VideoCapture(0)
+            if not test_cap.isOpened():
+                test_cap.release()
+                return [(640, 480), (1280, 720)], [15, 20, 25, 30]
+            for w, h in candidates:
+                test_cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+                test_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+                actual_w = int(test_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                actual_h = int(test_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                if actual_w > 0 and actual_h > 0:
+                    supported.append((actual_w, actual_h))
+            test_cap.release()
+        except Exception:
+            pass
+        if not supported:
+            supported = [(640, 480), (1280, 720)]
+        # 去重并排序
+        seen = set()
+        unique = []
+        for w, h in supported:
+            key = (w, h)
+            if key not in seen:
+                seen.add(key)
+                unique.append(key)
+        unique.sort(key=lambda x: x[0] * x[1])
+        fps_options = [10, 15, 20, 25, 30]
+        return unique, fps_options
+
     def apply_video_params(self, width, height, fps):
         """应用新的视频录制参数并重启摄像头"""
         self.width = width
