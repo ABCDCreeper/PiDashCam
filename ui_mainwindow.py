@@ -41,6 +41,14 @@ class TimeSettingDialog(QDialog):
         )
         layout.addWidget(self.lbl_current)
 
+        # 实时系统时钟（每秒刷新）
+        self.lbl_sys_time = QLabel()
+        self.lbl_sys_time.setAlignment(Qt.AlignCenter)
+        self.lbl_sys_time.setStyleSheet(
+            "color: #aaa; font-size: 18px; padding: 4px;"
+        )
+        layout.addWidget(self.lbl_sys_time)
+
         now = datetime.now()
         self.year = now.year
         self.month = now.month
@@ -61,7 +69,7 @@ class TimeSettingDialog(QDialog):
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(15)
-        btn_confirm = QPushButton("✅ 确认设置")
+        btn_confirm = QPushButton("💾 保存")
         btn_confirm.setStyleSheet(
             "background-color: #0088cc; font-size: 24px; font-weight: bold; "
             "min-height: 65px; border-radius: 8px;"
@@ -77,12 +85,26 @@ class TimeSettingDialog(QDialog):
         btn_row.addWidget(btn_cancel)
         layout.addLayout(btn_row)
 
+        # 启动实时时钟刷新
+        self._sys_timer = QTimer(self)
+        self._sys_timer.timeout.connect(self._update_system_time)
+        self._sys_timer.start(1000)
+        self._update_system_time()
+
         self.showFullScreen()
 
     def _update_current_display(self):
         self.lbl_current.setText(
-            f"当前: {self.year}-{self.month:02d}-{self.day:02d} "
+            f"目标: {self.year}-{self.month:02d}-{self.day:02d} "
             f"{self.hour:02d}:{self.minute:02d}:00"
+        )
+
+    def _update_system_time(self):
+        """每秒刷新实时系统时钟"""
+        now = datetime.now()
+        self.lbl_sys_time.setText(
+            f"⏱ 系统时间: {now.year}-{now.month:02d}-{now.day:02d} "
+            f"{now.hour:02d}:{now.minute:02d}:{now.second:02d}"
         )
 
     def _make_row(self, label, field):
