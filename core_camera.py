@@ -457,16 +457,25 @@ class CameraWorker(QObject):
             )
             if result.returncode == 0:
                 text = result.stdout
-                # 解析 Size: Discrete WIDTHxHEIGHT
-                for m in re.finditer(r"Size:\s*Discrete\s+(\d+)x(\d+)", text):
-                    w, h = int(m.group(1)), int(m.group(2))
-                    if w > 0 and h > 0:
-                        res_set.add((w, h))
-                # 解析 Interval ... (XX.XXX fps)
-                for m in re.finditer(r"\((\d+\.?\d*)\s*fps\)", text):
-                    fps = round(float(m.group(1)))
-                    if 1 <= fps <= 120:
-                        fps_set.add(fps)
+                current_w, current_h = 0, 0
+                # 逐行解析：Size: Discrete 后紧跟 Interval，关联处理
+                for line in text.split('\n'):
+                    m_size = re.match(r"\s*Size:\s*Discrete\s+(\d+)x(\d+)", line)
+                    if m_size:
+                        w, h = int(m_size.group(1)), int(m_size.group(2))
+                        # 只接受合理视频分辨率 (80~2592)，过滤 Sensor 拍照分辨率
+                        if 80 <= w <= 2592 and 60 <= h <= 1944:
+                            current_w, current_h = w, h
+                            res_set.add((w, h))
+                        else:
+                            current_w, current_h = 0, 0
+                        continue
+                    # Interval 必须紧跟有效的 Size 行
+                    m_int = re.match(r"\s*Interval:\s*Discrete\s+\S+\s+\((\d+\.?\d*)\s*fps\)", line)
+                    if m_int and current_w > 0:
+                        fps = round(float(m_int.group(1)))
+                        if 1 <= fps <= 120:
+                            fps_set.add(fps)
         except Exception:
             pass
 

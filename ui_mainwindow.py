@@ -475,35 +475,22 @@ class DashcamMainWindow(QMainWindow):
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(2)
         
-        # 录制参数行：参数标签 + 设置按钮
-        param_row = QHBoxLayout()
-        param_row.setSpacing(4)
-
+        # 录制参数行
         self.recording_params_lbl = QLabel()
         self.recording_params_lbl.setAlignment(Qt.AlignCenter)
         self.recording_params_lbl.setStyleSheet(
-            "color: #888; font-size: 12px; padding: 0px;"
+            "color: #aaa; font-size: 14px; font-weight: bold; padding: 1px;"
         )
-        param_row.addWidget(self.recording_params_lbl)
-
-        btn_video_settings = QPushButton("⚙ 视频参数")
-        btn_video_settings.setStyleSheet(
-            "background-color: #1a1a1a; color: #aaa; font-size: 13px; "
-            "border: 1px solid #444; border-radius: 4px; min-height: 22px; padding: 2px 8px;"
-        )
-        btn_video_settings.clicked.connect(self.open_video_settings)
-        param_row.addWidget(btn_video_settings)
-
-        layout.addLayout(param_row)
+        layout.addWidget(self.recording_params_lbl)
         
-        # 按钮行
+        # 按钮行（4 个等大按钮）
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
+        btn_row.setSpacing(6)
         
         self.btn_record = QPushButton("● 开始录像")
         self.btn_record.setCheckable(True)
         self.btn_record.clicked.connect(self.toggle_record)
-        self.btn_record.setStyleSheet("background-color: #1b4f72; font-size: 20px;")
+        self.btn_record.setStyleSheet("background-color: #1b4f72; font-size: 18px;")
         
         btn_settings = QPushButton("⚙️ 系统设置")
         btn_settings.clicked.connect(lambda: self.stack.setCurrentIndex(1))
@@ -511,9 +498,13 @@ class DashcamMainWindow(QMainWindow):
         btn_playback = QPushButton("📂 视频回放")
         btn_playback.clicked.connect(self.open_playback_page)
         
-        btn_row.addWidget(self.btn_record, stretch=4)
-        btn_row.addWidget(btn_settings, stretch=3)
-        btn_row.addWidget(btn_playback, stretch=3)
+        btn_video_settings = QPushButton("🎬 录制参数")
+        btn_video_settings.clicked.connect(self.open_video_settings)
+        
+        btn_row.addWidget(self.btn_record, stretch=3)
+        btn_row.addWidget(btn_settings, stretch=2)
+        btn_row.addWidget(btn_playback, stretch=2)
+        btn_row.addWidget(btn_video_settings, stretch=2)
         layout.addLayout(btn_row)
         return page
 
