@@ -61,7 +61,7 @@ sudo apt install -y git python3-pip python3-pyqt5 python3-opencv \
 |---|---|
 | `cage` | Wayland kiosk compositor，让 PyQt5 直接在 Wayland 上全屏，无需桌面环境 |
 | `seatd` | 最小化 seat 管理守护进程，为 cage 提供 DRM/输入设备访问 |
-| `ffmpeg` | 视频转封装——Web 管理页播放时 MKV→MP4 实时转换（仅改容器，CPU 极低） |
+| `ffmpeg` | 录制硬件 H.264 编码 + Web 管理页 MKV→MP4 转封装 |
 | `acl` | `getfacl` 命令，调试 DRM 设备权限（故障排查用） |
 | `libcap2-bin` | `getcap`/`setcap` 命令，调试 Linux capabilities（故障排查用） |
 
@@ -123,7 +123,7 @@ seatd 是一个最小化 seat 管理守护进程，负责在无桌面环境下�
 ```bash
 sudo systemctl enable seatd
 sudo systemctl start seatd
-# cam 用户加入必要组：video（GPU）、render（硬件加速）、input（触摸屏）、plugdev（USB）
+# cam 用户加入必要组：video（GPU + V4L2 硬件编码器）、render（硬件加速）、input（触摸屏）、plugdev（USB）
 sudo usermod -aG video,render,input,plugdev cam
 ```
 
@@ -134,7 +134,7 @@ seatd 通过 **logind session** 动态授权：
 2. seatd 检测到 `cam` 是 seat0 的活跃用户，自动添加 ACL 到 `/dev/dri/card0`、`/dev/input/*`
 3. `Environment="LIBSEAT_BACKEND=seatd"` 通知 cage/wlroots 用 seatd 而非 elogind
 
-因此 `cam` **不需要**在 `video` 组——seatd 绕过了 Unix 组权限。但加入 `video` 组提供手动测试时的回退方案。
+因此 `cam` 对 DRM 设备**不一定需要** `video` 组——seatd 绕过了 Unix 组权限。但 `video` 组是**必需的**：V4L2 硬件编码器 `/dev/video11` 通过 Unix 组权限控制。
 
 > 加入组后需要**重新登录**或重启才能生效。
 
@@ -151,6 +151,25 @@ cage + seatd 方案：
 - ✅ PyQt5 直接通过 `QT_QPA_PLATFORM=wayland` 渲染
 - ✅ DRM 直接写屏，无 X11 中间层，更低延迟
 - ✅ cage 自动处理 VT 切换、全屏、屏幕旋转
+
+### 3.8 验证硬件编码器
+
+DashCam 会自动检测并使用树莓派 V4L2 H.264 硬件编码器（`h264_v4l2m2m`）。编码器不可用时自动回退到 ffmpeg `libx264` 软件编码。
+
+```bash
+# 确认设备节点存在
+ls -la /dev/video11
+# 输出: crw-rw----+ 1 root video 81, 11 ... /dev/video11
+
+# 确认 ffmpeg 支持
+ffmpeg -encoders 2>/dev/null | grep h264_v4l2m2m
+# 输出: V..... h264_v4l2m2m    V4L2 mem2mem H.264 encoder wrapper
+
+# 快速编码测试
+ffmpeg -f lavfi -i testsrc2=size=32x32:rate=1 -c:v h264_v4l2m2m -frames:v 1 -f null -
+```
+
+> cam 用户必须在 `video` 组中（见 3.6 节），且 systemd unit 需配置 `SupplementaryGroups=video`。
 
 ---
 

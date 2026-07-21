@@ -1,10 +1,10 @@
-# core_camera.py
+﻿# core_camera.py
 import os
 import time
 import json
 import psutil
 import threading
-import subprocess
+import subprocess as sp
 import cv2
 from datetime import datetime
 from PyQt5.QtCore import pyqtSignal, QObject
@@ -165,7 +165,7 @@ class SystemUtils:
         
         try:
             cmd = ["lsblk", "-o", "NAME,LABEL,MOUNTPOINT,TRAN,RM,PKNAME,TYPE", "-J"]
-            res = subprocess.run(cmd, capture_output=True, text=True)
+            res = sp.run(cmd, capture_output=True, text=True)
             block_devs = json.loads(res.stdout).get("blockdevices", [])
             
             # 1. 扫描根目录 / 对应的硬件父级盘名称
@@ -210,8 +210,8 @@ class SystemUtils:
                     # 挂载 USB 设备（需 root 运行 DashCam 才能写入 exFAT）
                     target_mount = f"/mnt/usb_{dev_name}"
                     if not mountpoint:
-                        subprocess.run(["sudo", "mkdir", "-p", target_mount], capture_output=True)
-                        m_res = subprocess.run(
+                        sp.run(["sudo", "mkdir", "-p", target_mount], capture_output=True)
+                        m_res = sp.run(
                             ["sudo", "mount", f"/dev/{dev_name}", target_mount],
                             capture_output=True, text=True
                         )
@@ -255,8 +255,8 @@ class SystemUtils:
                 devname = d.split("_", 1)[-1]
                 if devname not in live:
                     # 设备已不存在 → 强制卸载并删除目录
-                    subprocess.run(["sudo", "umount", "-l", d], capture_output=True)
-                    subprocess.run(["sudo", "rm", "-rf", d], capture_output=True)
+                    sp.run(["sudo", "umount", "-l", d], capture_output=True)
+                    sp.run(["sudo", "rm", "-rf", d], capture_output=True)
                     print(f"🧹 已清理废弃挂载: {d}")
         except Exception:
             pass
@@ -282,7 +282,8 @@ class CameraWorker(QObject):
         self.fps_target = 30
         self.width = 1920
         self.height = 1080
-        self.video_writer = None
+        self._encoder_proc = None  # ffmpeg Popen（硬件/软件编码）或 None
+        self._hw_encoder = None    # 检测到的 H.264 硬件编码器名，或 None
         self.record_start_time = 0
         self.current_video_filename = ""
         
@@ -294,13 +295,16 @@ class CameraWorker(QObject):
         self.last_log_time = 0
         
         self._restart_camera = False  # 切换参数时通知 _loop 重启摄像头
-        self._writer_lock = threading.RLock()  # 保护 video_writer 跨线程访问（可重入）
+        self._writer_lock = threading.RLock()  # 保护 _encoder_proc 跨线程访问（可重入）
         self._segment_frame_count = 0  # 当前录制段帧数计数
         self._total_recorded_frames = 0  # 累计录制帧数
         self._recording_start_time = 0.0  # 录制开始墙钟时间
         self._pending_storage_path = None  # 待切换的目标路径
         self._frame_count = 0  # 用于周期性 USB 检测
         self._no_usb_shown = False  # 全屏 OSD 防重复
+        
+        # 检测硬件编码器（h264_v4l2m2m），不可用则回退到 ffmpeg libx264
+        self._hw_encoder = self._detect_hw_encoder()
         
         # 启动时恢复上一次的 USB 存储位置
         saved = self._load_storage_config()
@@ -324,6 +328,28 @@ class CameraWorker(QObject):
 
         threading.Thread(target=self._load_lpr_model, daemon=True).start()
 
+    def _detect_hw_encoder(self):
+        """检测可用的 H.264 硬件编码器，返回 'h264_v4l2m2m' 或 None"""
+        try:
+            # 先检查 ffmpeg 编码器列表
+            res = sp.run(["ffmpeg", "-encoders"], capture_output=True, text=True, timeout=5)
+            if "h264_v4l2m2m" not in res.stdout:
+                return None
+            # 验证编码器设备可用（尝试编码一帧）
+            test = sp.run(
+                ["ffmpeg", "-hide_banner", "-f", "lavfi", "-i",
+                 "testsrc2=size=32x32:rate=1", "-c:v", "h264_v4l2m2m",
+                 "-frames:v", "1", "-f", "null", "-"],
+                capture_output=True, text=True, timeout=5
+            )
+            if test.returncode == 0:
+                print("✅ 硬件编码器 h264_v4l2m2m 可用")
+                return "h264_v4l2m2m"
+        except Exception:
+            pass
+        print("⚠️ 硬件编码器不可用，将使用 ffmpeg libx264 软件编码")
+        return None
+
     def switch_storage_path(self, new_path):
         """安全切换存储路径：先保存当前片段到旧盘，再在新盘开始新片段。
         
@@ -332,7 +358,7 @@ class CameraWorker(QObject):
         if self.storage_path == new_path:
             return
         self._pending_storage_path = new_path
-        if self.is_recording and self.video_writer:
+        if self.is_recording and self._encoder_proc:
             print(f"🔄 正在保存当前片段到原盘，即将切换至: {new_path}")
             self.stop_recording_file()  # 保存旧盘文件，下个循环在新盘创建
 
@@ -464,7 +490,7 @@ class CameraWorker(QObject):
 
         # 方案 1：v4l2-ctl（精确，不受 OpenCV 占用影响）
         try:
-            result = subprocess.run(
+            result = sp.run(
                 ["v4l2-ctl", "--list-formats-ext"],
                 capture_output=True, text=True, timeout=5
             )
@@ -556,9 +582,8 @@ class CameraWorker(QObject):
                 # 1. 安全停止录制
                 self.is_recording = False
                 with self._writer_lock:
-                    if self.video_writer:
-                        self.video_writer.release()
-                        self.video_writer = None
+                    if self._encoder_proc:
+                        self._close_encoder()
                         self.current_video_filename = ""
                 if was_recording:
                     self.recording_toggled.emit(False)
@@ -636,7 +661,7 @@ class CameraWorker(QObject):
                 except Exception:
                     pass
             else:
-                if self.video_writer is not None:
+                if self._encoder_proc is not None:
                     self.stop_recording_file()
                 
             cv2.putText(frame, "AI Status: ON (>0.85)", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
@@ -678,7 +703,7 @@ class CameraWorker(QObject):
             return
         
         now = time.time()
-        if self.video_writer is None or (now - self.record_start_time) > 180:
+        if self._encoder_proc is None or (now - self.record_start_time) > 180:
             self.stop_recording_file()
             self._check_and_clean_disk()
             
@@ -687,7 +712,6 @@ class CameraWorker(QObject):
             if self._pending_storage_path is not None:
                 target_path = self._pending_storage_path
             
-            # 🌟 再次确保目标文件夹有写入权限
             try:
                 os.makedirs(target_path, exist_ok=True)
             except Exception as e:
@@ -700,16 +724,12 @@ class CameraWorker(QObject):
             
             self.current_video_filename = datetime.now().strftime("REC_%Y%m%d_%H%M%S.mkv")
             filepath = os.path.join(target_path, self.current_video_filename)
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            # 用实时测量帧率创建 VideoWriter（1080p 软件编码 ~8-15fps）
             measured_fps = max(8.0, self._get_measured_fps())
-            self.video_writer = cv2.VideoWriter(filepath, fourcc, measured_fps, (self.width, self.height))
             
-            # 🌟 核心修复 3：检测视频文件是否真正创建成功！防止静默失败！
-            if not self.video_writer.isOpened():
-                print(f"❌ 致命错误：无法写入文件 {filepath}！请检查目录写入权限！")
-                self.video_writer.release()
-                self.video_writer = None
+            # 启动 ffmpeg 编码器（硬件优先，不可用时用 libx264）
+            self._encoder_proc = self._start_ffmpeg_encoder(filepath, measured_fps)
+            if self._encoder_proc is None:
+                print(f"❌ 致命错误：无法启动编码器写入 {filepath}！")
                 if self._pending_storage_path is not None:
                     print(f"⚠️ 新盘创建失败，回退到旧路径: {self.storage_path}")
                     self.storage_notify.emit(f"⚠️ 无法写入 {target_path}，已回退旧盘")
@@ -726,17 +746,13 @@ class CameraWorker(QObject):
                 print(f"✅ 存储路径已切换至: {self.storage_path}")
                 
             self.record_start_time = now
-            print(f"🎬 开始录制新分段: {filepath}")
+            print(f"🎬 开始录制新分段: {filepath} [{self._hw_encoder or 'libx264'}]")
 
-        if self.video_writer:
+        if self._encoder_proc:
             try:
                 with self._writer_lock:
-                    if self.video_writer:
-                        self.video_writer.write(frame)
-                        self._segment_frame_count += 1
-                        self._total_recorded_frames += 1
-                        if self._recording_start_time == 0:
-                            self._recording_start_time = time.time()
+                    if self._encoder_proc:
+                        self._write_frame(frame)
             except Exception:
                 # U盘拔出等写入失败：停止录制
                 print(f"⚠️ 写入失败（U盘已拔出），停止录制")
@@ -757,12 +773,70 @@ class CameraWorker(QObject):
         return self.fps_target
 
     def stop_recording_file(self):
+        """安全关闭当前录制分段"""
         with self._writer_lock:
-            if self.video_writer:
-                self.video_writer.release()
-                self.video_writer = None
+            if self._encoder_proc:
+                self._close_encoder()
                 self.current_video_filename = ""
                 print("🛑 录制底层资源已安全释放。")
+
+    def _start_ffmpeg_encoder(self, filepath, fps):
+        """启动 ffmpeg 子进程进行 H.264 编码，返回 Popen 或 None。
+        
+        优先使用硬件编码器（h264_v4l2m2m），不可用时回退到 libx264 软件编码。
+        """
+        encoder = self._hw_encoder or "libx264"
+        cmd = [
+            "ffmpeg", "-hide_banner",
+            "-f", "rawvideo", "-pix_fmt", "bgr24",
+            "-s", f"{self.width}x{self.height}",
+            "-r", str(fps),
+            "-thread_queue_size", "64",
+            "-i", "-",
+            "-c:v", encoder,
+            "-b:v", "4M",
+            "-g", "30",
+        ]
+        if encoder == "h264_v4l2m2m":
+            cmd += ["-num_capture_buffers", "16"]
+        if encoder == "libx264":
+            cmd += ["-preset", "ultrafast", "-tune", "zerolatency"]
+        cmd += ["-pix_fmt", "yuv420p", "-f", "matroska", "-y", filepath]
+        
+        try:
+            proc = sp.Popen(cmd, stdin=sp.PIPE, stderr=sp.PIPE)
+            return proc
+        except Exception as e:
+            print(f"❌ 启动 ffmpeg 编码器失败: {e}")
+            return None
+
+    def _write_frame(self, frame):
+        """向 ffmpeg 编码器写入一帧"""
+        try:
+            self._encoder_proc.stdin.write(frame.tobytes())
+            self._segment_frame_count += 1
+            self._total_recorded_frames += 1
+            if self._recording_start_time == 0:
+                self._recording_start_time = time.time()
+        except BrokenPipeError:
+            raise Exception("ffmpeg pipe 断开")
+
+    def _close_encoder(self):
+        """安全关闭 ffmpeg 编码器进程（关闭 stdin → 等待退出 → 必要时 kill）"""
+        if self._encoder_proc is None:
+            return
+        proc = self._encoder_proc
+        self._encoder_proc = None
+        try:
+            if proc.stdin:
+                proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except sp.TimeoutExpired:
+            proc.kill()
+            proc.wait()
 
     def _load_storage_config(self):
         """读取上次保存的存储路径"""
