@@ -979,23 +979,37 @@ class DashcamMainWindow(QMainWindow):
             # 2. 关键留白：强制休眠 2 秒！留给 Linux 内核把网卡从 AP 广播模式切换回监听模式
             time.sleep(2.0)
             
-            # 3. 同步扫描唤醒网卡（--rescan yes 会等待扫描完成再返回，避免连接超时）
-            subprocess.run(
-                ["sudo", "nmcli", "device", "wifi", "list", "--rescan", "yes"],
-                capture_output=True, timeout=15
-            )
+            # 3. 反复扫描直到目标 SSID 出现（最多 3 次，每次间隔 2 秒）
+            ssid_visible = False
+            for attempt in range(3):
+                subprocess.run(
+                    ["sudo", "nmcli", "device", "wifi", "list", "--rescan", "yes"],
+                    capture_output=True, timeout=15
+                )
+                # 检查目标 SSID 是否在扫描结果中
+                check = subprocess.run(
+                    ["sudo", "nmcli", "-t", "-f", "SSID", "device", "wifi", "list"],
+                    capture_output=True, text=True, timeout=10
+                )
+                if ssid in check.stdout.split('\n'):
+                    ssid_visible = True
+                    break
+                time.sleep(2.0)
+            if not ssid_visible:
+                raise Exception(f"未扫描到 {ssid}")
             
             # 4. 发起连接
             cmd = ["sudo", "nmcli", "device", "wifi", "connect", ssid, "password", password]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if res.returncode == 0:
                 msg = f"✅ 成功连接至 Wi-Fi:\n{ssid}"
                 if need_save:
                     self.save_wifi_password(ssid, password) # 成功才记住密码
             else:
-                msg = f"❌ 连接失败:\n请检查密码或信号强度"
-        except Exception:
-            msg = f"❌ Wi-Fi 连接超时"
+                err = res.stderr.strip()[-80:] if res.stderr else "无详细信息"
+                msg = f"❌ 连接失败:\n{err}"
+        except Exception as e:
+            msg = f"❌ Wi-Fi 连接超时: {e}"
             
         self.osd_signal.emit(msg)
         self.poll_network_status() # 成功后同步更新左下角网络状态
