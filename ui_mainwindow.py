@@ -951,8 +951,9 @@ class DashcamMainWindow(QMainWindow):
     # 🌟 升级：支持检查是否已记住了密码
     def start_wifi_connection_flow(self):
         scanner = WifiScannerDialog(self)
-        if scanner.exec_() == QDialog.Accepted and scanner.selected_ssid:
+        if scanner.exec_() == QDialog.Accepted and scanner.selected_bssid:
             target_ssid = scanner.selected_ssid
+            target_bssid = scanner.selected_bssid
             
             # 检查记忆库
             saved_wifis = self.load_saved_wifi()
@@ -960,7 +961,7 @@ class DashcamMainWindow(QMainWindow):
                 # 记住了！直接用保存的密码秒连，不用再弹键盘！
                 password = saved_wifis[target_ssid]
                 self.show_osd_message(f"⚡ 使用已记住密码连接:\n{target_ssid}...")
-                threading.Thread(target=self._bg_connect_wifi, args=(target_ssid, password, False), daemon=True).start()
+                threading.Thread(target=self._bg_connect_wifi, args=(target_ssid, password, False, target_bssid), daemon=True).start()
             else:
                 # 没记住，弹触控键盘输密码
                 kb = TouchKeyboard(self, title=f"请输入 Wi-Fi 密码: {target_ssid}")
@@ -968,10 +969,10 @@ class DashcamMainWindow(QMainWindow):
                     password = kb.get_password()
                     self.show_osd_message(f"正在尝试连接:\n{target_ssid}...")
                     # 传入 True，连接成功后自动记忆！
-                    threading.Thread(target=self._bg_connect_wifi, args=(target_ssid, password, True), daemon=True).start()
+                    threading.Thread(target=self._bg_connect_wifi, args=(target_ssid, password, True, target_bssid), daemon=True).start()
 
     # 🌟 升级：解决从热点切换到 Wi-Fi 失败的硬件竞争问题
-    def _bg_connect_wifi(self, ssid, password, need_save=False):
+    def _bg_connect_wifi(self, ssid, password, need_save=False, bssid=""):
         try:
             # 1. 核心修复：单网卡从 AP 切 Client，必须彻底杀掉热点并断开设备！
             subprocess.run(["sudo", "nmcli", "connection", "down", "Pi-Dashcam"], capture_output=True)
@@ -987,19 +988,22 @@ class DashcamMainWindow(QMainWindow):
                     capture_output=True, timeout=15
                 )
                 # 检查目标 SSID 是否在扫描结果中
+                check_fields = "SSID,BSSID" if bssid else "SSID"
                 check = subprocess.run(
-                    ["sudo", "nmcli", "-t", "-f", "SSID", "device", "wifi", "list"],
+                    ["sudo", "nmcli", "-t", "-f", check_fields, "device", "wifi", "list"],
                     capture_output=True, text=True, timeout=10
                 )
-                if ssid in check.stdout.split('\n'):
+                target_match = bssid if bssid else ssid
+                if target_match in check.stdout:
                     ssid_visible = True
                     break
                 time.sleep(2.0)
             if not ssid_visible:
-                raise Exception(f"未扫描到 {ssid}")
+                raise Exception(f"未扫描到 {bssid or ssid}")
             
             # 4. 发起连接
-            cmd = ["sudo", "nmcli", "device", "wifi", "connect", ssid, "password", password]
+            target = bssid if bssid else ssid
+            cmd = ["sudo", "nmcli", "device", "wifi", "connect", target, "password", password]
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if res.returncode == 0:
                 msg = f"✅ 成功连接至 Wi-Fi:\n{ssid}"

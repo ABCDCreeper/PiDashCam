@@ -16,14 +16,15 @@ class WifiWorker(QObject):
         try:
             subprocess.run(["sudo","nmcli","radio","wifi","on"])
             time.sleep(1)
-            cmd = ["sudo", "nmcli", "-t", "-f", "SSID,SIGNAL", "dev", "wifi", "list", "--rescan", "yes"]
+            cmd = ["sudo", "nmcli", "-t", "-f", "SSID,SIGNAL,BSSID", "dev", "wifi", "list", "--rescan", "yes"]
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=12)
             networks = []
             for line in res.stdout.split('\n'):
-                if ':' in line:
-                    ssid, signal = line.split(':', 1)
+                parts = line.split(':')
+                if len(parts) >= 3:
+                    ssid, signal, bssid = parts[0], parts[1], parts[2]
                     if ssid.strip() and not ssid.startswith('--') and ssid not in [n['ssid'] for n in networks]:
-                        networks.append({'ssid': ssid, 'signal': signal})
+                        networks.append({'ssid': ssid, 'signal': signal, 'bssid': bssid.strip()})
             self.scan_finished.emit(networks)
         except Exception as e:
             self.scan_error.emit(str(e))
@@ -79,6 +80,7 @@ class WifiScannerDialog(QDialog):
         self.worker.scan_error.connect(self._show_error)
         
         self.selected_ssid = None
+        self.selected_bssid = None
         self.showFullScreen()
         QTimer.singleShot(100, self.scan_networks)
 
@@ -96,7 +98,7 @@ class WifiScannerDialog(QDialog):
             self.lbl_status.setText("📶 请按压选择要连接的 Wi-Fi：")
             for net in networks:
                 item = QListWidgetItem(f"   📶  {net['ssid']}   (信号强度: {net['signal']}%)")
-                item.setData(Qt.UserRole, net['ssid'])
+                item.setData(Qt.UserRole, {'ssid': net['ssid'], 'bssid': net.get('bssid', '')})
                 self.list_widget.addItem(item)
         self.btn_rescan.setEnabled(True)
         
@@ -105,5 +107,7 @@ class WifiScannerDialog(QDialog):
         self.btn_rescan.setEnabled(True)
 
     def on_network_selected(self, item):
-        self.selected_ssid = item.data(Qt.UserRole)
+        data = item.data(Qt.UserRole)
+        self.selected_ssid = data['ssid']
+        self.selected_bssid = data.get('bssid', '')
         self.accept()
