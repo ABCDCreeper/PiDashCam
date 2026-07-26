@@ -447,7 +447,7 @@ class CameraWorker(QObject):
                     new_plates = []
                     for plate in results:
                         conf = float(plate[1])
-                        if conf > 0.85:
+                        if conf > 0.95:
                             text = plate[0]
                             box = [int(v) for v in plate[3]]
                             new_plates.append((text, conf, box, now))
@@ -677,7 +677,7 @@ class CameraWorker(QObject):
             if self._encoder_proc is not None:
                 self.stop_recording_file()
 
-        cv2.putText(frame, "AI Status: ON (>0.85)", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        cv2.putText(frame, "AI Status: ON (>0.95)", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
         # LPR 识别跳帧执行（节省 CPU 用于预览）
         if self._frame_count % 3 == 0:
