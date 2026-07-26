@@ -979,9 +979,11 @@ class DashcamMainWindow(QMainWindow):
             # 2. 关键留白：强制休眠 2 秒！留给 Linux 内核把网卡从 AP 广播模式切换回监听模式
             time.sleep(2.0)
             
-            # 3. 重新扫描唤醒网卡
-            subprocess.run(["sudo", "nmcli", "device", "wifi", "rescan"], capture_output=True)
-            time.sleep(1.0)
+            # 3. 同步扫描唤醒网卡（--rescan yes 会等待扫描完成再返回，避免连接超时）
+            subprocess.run(
+                ["sudo", "nmcli", "device", "wifi", "list", "--rescan", "yes"],
+                capture_output=True, timeout=15
+            )
             
             # 4. 发起连接
             cmd = ["sudo", "nmcli", "device", "wifi", "connect", ssid, "password", password]
