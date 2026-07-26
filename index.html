@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>车缘 DashCam — 管理控制台</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0a0f;--card:#151520;--border:#2a2a3a;
+  --accent:#0073e6;--green:#27ae60;--red:#e74c3c;
+  --text:#ddd;--dim:#888;--title:#00aaff;
+  --radius:10px;--transition:0.2s ease;
+}
+body{
+  background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  min-height:100vh;overflow-x:hidden;
+  -webkit-tap-highlight-color:transparent;
+}
+/* ---- 顶部导航 ---- */
+header{
+  background:var(--card);border-bottom:1px solid var(--border);
+  padding:12px 16px;
+  display:flex;align-items:center;justify-content:space-between;
+  position:sticky;top:0;z-index:100;
+}
+header .logo{font-size:20px;font-weight:700;color:var(--title)}
+header .logo .dot{color:var(--green)}
+header .status-dot{
+  width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:6px;
+}
+header .status-dot.recording{background:var(--red);animation:pulse 1.5s infinite}
+header .status-dot.idle{background:var(--dim)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+
+nav{display:flex;gap:4px;overflow-x:auto;white-space:nowrap;padding:8px 12px;background:var(--card);border-bottom:1px solid var(--border)}
+nav button{
+  background:none;border:none;color:var(--dim);font-size:15px;font-weight:600;
+  padding:8px 18px;border-radius:20px;transition:var(--transition);cursor:pointer;
+}
+nav button.active,nav button:hover{background:var(--accent);color:#fff}
+
+/* ---- 页面容器 ---- */
+main{padding:12px;max-width:960px;margin:0 auto}
+.page{display:none}
+.page.active{display:block}
+
+/* ---- 卡片 ---- */
+.card{
+  background:var(--card);border:1px solid var(--border);
+  border-radius:var(--radius);padding:16px;margin-bottom:12px;
+}
+.card h2{font-size:17px;color:var(--title);margin-bottom:12px;display:flex;align-items:center;gap:6px}
+.card h2 .emoji{font-size:20px}
+
+/* ---- 状态网格 ---- */
+.status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+.stat-box{
+  background:rgba(0,115,230,0.08);border:1px solid rgba(0,115,230,0.2);
+  border-radius:var(--radius);padding:14px;text-align:center;
+}
+.stat-box .val{font-size:26px;font-weight:700;color:var(--title)}
+.stat-box .lbl{font-size:12px;color:var(--dim);margin-top:4px}
+.stat-box.warn .val{color:#f39c12}
+.stat-box.good .val{color:var(--green)}
+.stat-box.bad .val{color:var(--red)}
+
+/* ---- 按钮 ---- */
+.btn{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:10px 20px;border:none;border-radius:20px;
+  font-size:14px;font-weight:600;cursor:pointer;
+  transition:var(--transition);color:#fff;
+}
+.btn-primary{background:var(--accent)}
+.btn-success{background:var(--green)}
+.btn-danger{background:var(--red)}
+.btn-outline{background:none;border:1px solid var(--border)}
+.btn-sm{padding:6px 14px;font-size:13px}
+.btn:active{transform:scale(0.96)}
+.btn:disabled{opacity:0.5;pointer-events:none}
+
+/* ---- 视频列表 ---- */
+.video-list{display:flex;flex-direction:column;gap:8px}
+.video-item{
+  background:rgba(255,255,255,0.03);border:1px solid var(--border);
+  border-radius:var(--radius);padding:12px 14px;
+  display:flex;align-items:center;gap:12px;
+  transition:var(--transition);
+}
+.video-item:hover{border-color:var(--accent)}
+.video-item .v-icon{font-size:28px}
+.video-item .v-info{flex:1;min-width:0}
+.video-item .v-name{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.video-item .v-meta{font-size:12px;color:var(--dim);margin-top:2px}
+.video-item .v-actions{display:flex;gap:4px;flex-shrink:0}
+
+/* ---- 车牌表格 ---- */
+.plate-table{width:100%;border-collapse:collapse;font-size:13px}
+.plate-table th,.plate-table td{
+  padding:10px 8px;text-align:left;border-bottom:1px solid var(--border);
+}
+.plate-table th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase}
+.plate-table tr:hover{background:rgba(0,115,230,0.06)}
+.plate-highlight{color:var(--title);font-weight:700;font-size:16px}
+.plate-conf{background:rgba(39,174,96,0.15);color:var(--green);padding:2px 8px;border-radius:10px;font-size:12px;font-weight:600}
+
+/* ---- 搜索框 ---- */
+.search-bar{
+  display:flex;gap:8px;margin-bottom:12px;
+}
+.search-bar input{
+  flex:1;padding:10px 14px;background:rgba(255,255,255,0.05);
+  border:1px solid var(--border);border-radius:20px;color:var(--text);font-size:14px;
+  outline:none;transition:var(--transition);
+}
+.search-bar input:focus{border-color:var(--accent)}
+
+/* ---- 分页 ---- */
+.pagination{display:flex;justify-content:center;align-items:center;gap:8px;margin-top:12px}
+.pagination button{
+  background:var(--card);border:1px solid var(--border);color:var(--text);
+  padding:6px 14px;border-radius:16px;font-size:13px;cursor:pointer;
+}
+.pagination button:disabled{opacity:0.3}
+.pagination .page-num{color:var(--dim);font-size:13px}
+
+/* ---- 实时快照 ---- */
+.snapshot-container{text-align:center}
+.snapshot-container img{
+  max-width:100%;border-radius:var(--radius);border:2px solid var(--border);
+}
+.snapshot-container .refresh-hint{
+  font-size:12px;color:var(--dim);margin-top:8px;
+}
+
+/* ---- 视频播放器模态 ---- */
+.modal-overlay{
+  display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:200;
+  align-items:center;justify-content:center;
+}
+.modal-overlay.show{display:flex}
+.modal-content{
+  background:var(--card);border:1px solid var(--border);
+  border-radius:var(--radius);padding:12px;max-width:90vw;max-height:90vh;
+}
+.modal-content video{max-width:100%;max-height:70vh;border-radius:6px}
+.modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.modal-header span{font-weight:600;font-size:15px}
+.modal-header button{
+  background:none;border:none;color:var(--text);font-size:22px;cursor:pointer;padding:4px 8px;
+}
+
+/* ---- Toast ---- */
+.toast{
+  position:fixed;top:16px;left:50%;transform:translateX(-50%);
+  background:var(--accent);color:#fff;padding:10px 24px;
+  border-radius:20px;font-size:14px;font-weight:600;
+  z-index:300;opacity:0;transition:opacity 0.3s;
+  pointer-events:none;
+}
+.toast.show{opacity:1}
+
+/* ---- 响应式 ---- */
+@media(max-width:600px){
+  .status-grid{grid-template-columns:repeat(2,1fr)}
+  .video-item{flex-wrap:wrap}
+  .video-item .v-actions{width:100%;justify-content:flex-end}
+  .plate-table{font-size:12px}
+  .plate-table th,.plate-table td{padding:6px 4px}
+}
+</style>
+</head>
+<body>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<!-- 顶部 -->
+<header>
+  <div class="logo">🚗 车缘 <span class="dot">·</span> DashCam</div>
+  <div style="display:flex;align-items:center;gap:8px">
+    <span id="rec-dot" class="status-dot idle"></span>
+    <span id="header-status" style="font-size:13px;color:var(--dim)">加载中...</span>
+  </div>
+</header>
+
+<!-- 导航 -->
+<nav>
+  <button class="active" data-page="dashboard">📊 仪表盘</button>
+  <button data-page="videos">🎬 视频</button>
+  <button data-page="plates">🚗 车牌日志</button>
+  <button data-page="network">🌐 网络</button>
+</nav>
+
+<main>
+  <!-- ========== 仪表盘 ========== -->
+  <div class="page active" id="page-dashboard">
+    <div class="status-grid" id="status-grid">
+      <div class="stat-box"><div class="val">--</div><div class="lbl">录制状态</div></div>
+      <div class="stat-box"><div class="val">--</div><div class="lbl">存储剩余</div></div>
+      <div class="stat-box"><div class="val">--°C</div><div class="lbl">CPU 温度</div></div>
+      <div class="stat-box"><div class="val">--</div><div class="lbl">内存使用</div></div>
+      <div class="stat-box"><div class="val">--</div><div class="lbl">GPS 卫星</div></div>
+      <div class="stat-box"><div class="val">--</div><div class="lbl">运行时间</div></div>
+    </div>
+
+    <div class="card">
+      <h2><span class="emoji">🎛️</span> 快捷操作</h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-success" id="btn-record-toggle" onclick="toggleRecording()">● 开始录像</button>
+        <button class="btn btn-outline btn-sm" onclick="refreshAll()">🔄 刷新状态</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="emoji">📷</span> 实时画面快照</h2>
+      <div class="snapshot-container">
+        <img id="snapshot-img" src="" alt="摄像头快照" style="display:none" onerror="this.style.display='none';document.getElementById('snapshot-hint').textContent='⚠️ 无法获取快照'">
+        <div id="snapshot-hint" class="refresh-hint">点击下方按钮获取实时画面</div>
+        <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="refreshSnapshot()">📸 获取快照</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="emoji">📋</span> 系统日志</h2>
+      <div id="osd-log" style="font-size:12px;color:var(--dim);max-height:200px;overflow-y:auto;font-family:monospace;line-height:1.6">
+        <div>等待日志...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 视频管理 ========== -->
+  <div class="page" id="page-videos">
+    <div class="card">
+      <h2><span class="emoji">🎬</span> 录像文件列表 <span id="video-count" style="font-size:13px;color:var(--dim)"></span></h2>
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <button class="btn btn-outline btn-sm" onclick="loadVideos()">🔄 刷新列表</button>
+        <button class="btn btn-outline btn-sm" onclick="bulkDownload()">📥 批量下载提示</button>
+      </div>
+      <div class="video-list" id="video-list">
+        <div style="color:var(--dim);text-align:center;padding:24px">加载中...</div>
+      </div>
+    </div>
+
+    <!-- 视频播放器模态 -->
+    <div class="modal-overlay" id="player-modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <span id="player-title">视频播放</span>
+          <button onclick="closePlayer()">✕</button>
+        </div>
+        <video id="player-video" controls autoplay></video>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 车牌日志 ========== -->
+  <div class="page" id="page-plates">
+    <div class="card">
+      <h2><span class="emoji">🚗</span> AI 车牌识别日志</h2>
+      <div class="search-bar">
+        <input type="text" id="plate-search" placeholder="🔍 搜索车牌号（如：沪A）..." oninput="loadPlates(1)">
+      </div>
+      <div style="overflow-x:auto">
+        <table class="plate-table">
+          <thead>
+            <tr><th>车牌号</th><th>置信度</th><th>时间</th><th>视频文件</th><th>偏移(秒)</th></tr>
+          </thead>
+          <tbody id="plate-tbody">
+            <tr><td colspan="5" style="text-align:center;color:var(--dim);padding:24px">加载中...</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="pagination" id="plate-pagination"></div>
+    </div>
+  </div>
+
+  <!-- ========== 网络状态 ========== -->
+  <div class="page" id="page-network">
+    <div class="card">
+      <h2><span class="emoji">🌐</span> 网络状态</h2>
+      <div id="network-info" style="line-height:2;font-size:14px">
+        <div>加载中...</div>
+      </div>
+    </div>
+    <div class="card">
+      <h2><span class="emoji">⚡</span> 网络操作</h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-outline btn-sm" onclick="restartHotspot()">🔄 重启热点</button>
+        <button class="btn btn-outline btn-sm" onclick="disconnectWifi()">🔌 断开 WiFi（回热点）</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2><span class="emoji">📱</span> 连接说明</h2>
+      <div style="font-size:13px;color:var(--dim);line-height:1.8">
+        <p>🔹 <b>热点模式</b>：手机/电脑连接 WiFi <b>Pi-Dashcam</b>，浏览器打开上面显示的地址。</p>
+        <p>🔹 <b>WiFi 客户端模式</b>：树莓派连接家中 WiFi 后，同局域网内任意设备均可访问。</p>
+        <p>🔹 <b>SSH 管理</b>：<code>ssh pi@&lt;IP地址&gt;</code>（默认密码: raspberry）</p>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+// ==================== 全局状态 ====================
+const API_BASE = '';
+let recordingActive = false;
+let platesPage = 1;
+
+// ==================== 导航 ====================
+document.querySelectorAll('nav button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const page = btn.dataset.page;
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById('page-' + page).classList.add('active');
+    if (page === 'dashboard') refreshAll();
+    else if (page === 'videos') loadVideos();
+    else if (page === 'plates') loadPlates(1);
+    else if (page === 'network') loadNetwork();
+  });
+});
+
+// ==================== Toast ====================
+function toast(msg, ms=2500){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), ms);
+}
+
+// ==================== 仪表盘 ====================
+async function refreshAll(){
+  try {
+    const res = await fetch(API_BASE + '/api/status');
+    const data = await res.json();
+    renderDashboard(data);
+  } catch(e) {
+    console.error('状态加载失败', e);
+  }
+  loadOsdMessages();
+}
+
+function renderDashboard(data){
+  // 录制状态
+  recordingActive = data.recording?.active || false;
+  const dot = document.getElementById('rec-dot');
+  dot.className = 'status-dot ' + (recordingActive ? 'recording' : 'idle');
+  document.getElementById('header-status').textContent =
+    recordingActive ? '● 录像中' : '○ 待机';
+
+  const grid = document.getElementById('status-grid');
+  const boxes = grid.querySelectorAll('.stat-box');
+
+  // Box 0: 录制状态
+  boxes[0].querySelector('.val').textContent = recordingActive ? '● 录像中' : '○ 待机';
+  boxes[0].className = 'stat-box' + (recordingActive ? ' bad' : '');
+
+  // Box 1: 存储
+  fetch(API_BASE + '/api/storage').then(r=>r.json()).then(s=>{
+    if(s.usage){
+      boxes[1].querySelector('.val').textContent = s.usage.free_gb + ' GB';
+      boxes[1].querySelector('.lbl').textContent = '已用 ' + s.usage.percent + '%';
+      boxes[1].className = 'stat-box' + (s.usage.percent > 85 ? ' bad' : ' good');
+    } else {
+      boxes[1].querySelector('.val').textContent = '无U盘';
+      boxes[1].className = 'stat-box warn';
+    }
+  }).catch(()=>{});
+
+  // Box 2: CPU 温度
+  const temp = data.cpu_temp;
+  boxes[2].querySelector('.val').textContent = (temp !== null && temp !== undefined) ? temp + '°C' : '--°C';
+  boxes[2].className = 'stat-box' + (temp > 70 ? ' bad' : (temp > 0 ? ' good' : ''));
+
+  // Box 3: 内存
+  const mem = data.memory;
+  if(mem){
+    boxes[3].querySelector('.val').textContent = mem.percent + '%';
+    boxes[3].querySelector('.lbl').textContent = mem.used_gb + ' / ' + mem.total_gb + ' GB';
+    boxes[3].className = 'stat-box' + (mem.percent > 85 ? ' bad' : ' good');
+  }
+
+  // Box 4: GPS
+  const gps = data.gps;
+  if(gps && !gps.error){
+    boxes[4].querySelector('.val').textContent = gps.satellites + ' 颗';
+    boxes[4].querySelector('.lbl').textContent = gps.has_fix ? '已定位' : '未定位';
+    boxes[4].className = 'stat-box' + (gps.has_fix ? ' good' : '');
+  } else {
+    boxes[4].querySelector('.val').textContent = '无GPS';
+    boxes[4].className = 'stat-box';
+  }
+
+  // Box 5: 运行时间
+  boxes[5].querySelector('.val').textContent = data.server_uptime || '未知';
+  boxes[5].className = 'stat-box good';
+
+  // 录制按钮状态
+  const btn = document.getElementById('btn-record-toggle');
+  if(recordingActive){
+    btn.textContent = '■ 停止录像';
+    btn.className = 'btn btn-danger';
+  } else {
+    btn.textContent = '● 开始录像';
+    btn.className = 'btn btn-success';
+  }
+}
+
+async function refreshSnapshot(){
+  const img = document.getElementById('snapshot-img');
+  const hint = document.getElementById('snapshot-hint');
+  img.style.display = 'none';
+  hint.textContent = '正在获取...';
+  // 添加时间戳防缓存
+  img.src = API_BASE + '/api/snapshot?t=' + Date.now();
+  img.onload = () => { img.style.display = 'block'; hint.textContent = '实时画面快照（点击按钮刷新）'; };
+  img.onerror = () => { img.style.display = 'none'; hint.textContent = '⚠️ 无法获取快照（摄像头可能未就绪）'; };
+}
+
+async function loadOsdMessages(){
+  try {
+    const res = await fetch(API_BASE + '/api/osd');
+    const data = await res.json();
+    const logDiv = document.getElementById('osd-log');
+    if(data.messages && data.messages.length > 0){
+      logDiv.innerHTML = data.messages.slice(-20).map(m =>
+        '<div>[' + new Date(m.time*1000).toLocaleTimeString('zh-CN') + '] ' + escapeHtml(m.msg) + '</div>'
+      ).join('');
+    } else {
+      logDiv.innerHTML = '<div>暂无日志</div>';
+    }
+  } catch(e) {}
+}
+
+// ==================== 录像控制 ====================
+async function toggleRecording(){
+  const url = recordingActive ? '/api/record/stop' : '/api/record/start';
+  try {
+    const res = await fetch(API_BASE + url, {method:'POST'});
+    const data = await res.json();
+    toast(data.message || (recordingActive ? '录像已停止' : '录像已启动'));
+    setTimeout(refreshAll, 500);
+  } catch(e) {
+    toast('❌ 操作失败：' + e.message);
+  }
+}
+
+// ==================== 视频列表 ====================
+async function loadVideos(){
+  const listDiv = document.getElementById('video-list');
+  listDiv.innerHTML = '<div style="color:var(--dim);text-align:center;padding:24px">加载中...</div>';
+  try {
+    const res = await fetch(API_BASE + '/api/videos');
+    const data = await res.json();
+    document.getElementById('video-count').textContent = `(共 ${data.count} 个)`;
+
+    if(!data.videos || data.videos.length === 0){
+      listDiv.innerHTML = '<div style="color:var(--dim);text-align:center;padding:24px">📭 暂无录像文件</div>';
+      return;
+    }
+
+    listDiv.innerHTML = data.videos.map(v => `
+      <div class="video-item">
+        <span class="v-icon">🎞️</span>
+        <div class="v-info">
+          <div class="v-name">${escapeHtml(v.filename)}</div>
+          <div class="v-meta">${v.size_mb} MB · ${v.mtime}</div>
+        </div>
+        <div class="v-actions">
+          <button class="btn btn-primary btn-sm" onclick="playVideo('${escapeHtml(v.filename)}')">▶ 播放</button>
+          <a class="btn btn-outline btn-sm" href="${API_BASE}/api/videos/${encodeURIComponent(v.filename)}?download=1" download>📥 下载</a>
+          <button class="btn btn-danger btn-sm" onclick="deleteVideo('${escapeHtml(v.filename)}')">🗑️</button>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {
+    listDiv.innerHTML = '<div style="color:var(--red);text-align:center;padding:24px">加载失败: ' + e.message + '</div>';
+  }
+}
+
+function playVideo(filename){
+  const modal = document.getElementById('player-modal');
+  const video = document.getElementById('player-video');
+  document.getElementById('player-title').textContent = filename;
+  video.src = API_BASE + '/api/videos/' + encodeURIComponent(filename);
+  modal.classList.add('show');
+}
+
+function closePlayer(){
+  const modal = document.getElementById('player-modal');
+  const video = document.getElementById('player-video');
+  video.pause();
+  video.src = '';
+  modal.classList.remove('show');
+}
+
+async function deleteVideo(filename){
+  if(!confirm('确定删除 ' + filename + ' 吗？此操作不可恢复！')) return;
+  try {
+    const res = await fetch(API_BASE + '/api/videos/delete', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({filename: filename})
+    });
+    const data = await res.json();
+    toast(data.message || '已删除');
+    loadVideos();
+  } catch(e) {
+    toast('❌ 删除失败');
+  }
+}
+
+function bulkDownload(){
+  toast('💡 提示：视频文件较大，建议通过 SSH (scp) 或 U盘直接拷贝。\n单个视频可点击 📥 下载按钮。', 4000);
+}
+
+// ==================== 车牌日志 ====================
+async function loadPlates(page){
+  platesPage = page || 1;
+  const search = document.getElementById('plate-search').value;
+  const tbody = document.getElementById('plate-tbody');
+  tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--dim);padding:24px">加载中...</td></tr>';
+
+  try {
+    const params = new URLSearchParams({page: platesPage, per_page: 50});
+    if(search) params.set('search', search);
+    const res = await fetch(API_BASE + '/api/plates?' + params.toString());
+    const data = await res.json();
+
+    if(!data.plates || data.plates.length === 0){
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--dim);padding:24px">📭 暂无车牌识别记录</td></tr>';
+      renderPlatePagination(data);
+      return;
+    }
+
+    tbody.innerHTML = data.plates.map(p => `
+      <tr>
+        <td><span class="plate-highlight">${escapeHtml(p.plate)}</span></td>
+        <td><span class="plate-conf">${(p.confidence*100).toFixed(1)}%</span></td>
+        <td>${escapeHtml(p.time_str || '')}</td>
+        <td style="font-size:12px;color:var(--dim);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(p.video_file || '')}</td>
+        <td>${p.video_offset_sec || 0}s</td>
+      </tr>
+    `).join('');
+    renderPlatePagination(data);
+  } catch(e) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--red);padding:24px">加载失败</td></tr>';
+  }
+}
+
+function renderPlatePagination(data){
+  const pagDiv = document.getElementById('plate-pagination');
+  if(data.total_pages <= 1){
+    pagDiv.innerHTML = '<span class="page-num">共 ' + data.total + ' 条记录</span>';
+    return;
+  }
+  let html = '';
+  html += '<button ' + (data.page <= 1 ? 'disabled' : '') + ' onclick="loadPlates(' + (data.page-1) + ')">◀ 上一页</button>';
+  html += '<span class="page-num">第 ' + data.page + ' / ' + data.total_pages + ' 页 (共 ' + data.total + ' 条)</span>';
+  html += '<button ' + (data.page >= data.total_pages ? 'disabled' : '') + ' onclick="loadPlates(' + (data.page+1) + ')">下一页 ▶</button>';
+  pagDiv.innerHTML = html;
+}
+
+// ==================== 网络 ====================
+async function loadNetwork(){
+  try {
+    const res = await fetch(API_BASE + '/api/network');
+    const data = await res.json();
+    const netDiv = document.getElementById('network-info');
+    const modeLabels = {hotspot:'🔥 热点模式', wifi:'📶 WiFi 客户端', disconnected:'❌ 未连接'};
+    netDiv.innerHTML = `
+      <div>📡 <b>连接模式</b>：${modeLabels[data.mode] || data.mode}</div>
+      ${data.ssid ? '<div>📶 <b>WiFi SSID</b>：' + escapeHtml(data.ssid) + '</div>' : ''}
+      <div>🌍 <b>IP 地址</b>：<code style="background:rgba(0,115,230,0.15);padding:2px 8px;border-radius:4px;font-size:15px">${data.ip}</code></div>
+      <div style="margin-top:8px;padding:8px;background:rgba(0,115,230,0.08);border-radius:8px">
+        📱 <b>管理地址</b>：<a href="http://${data.ip}" style="color:var(--title)" target="_blank">http://${data.ip}</a>
+      </div>
+    `;
+  } catch(e) {}
+}
+
+async function restartHotspot(){
+  try {
+    const res = await fetch(API_BASE + '/api/restart-hotspot', {method:'POST'});
+    const data = await res.json();
+    toast(data.message || '热点重启中...');
+    setTimeout(loadNetwork, 3000);
+  } catch(e) { toast('❌ 操作失败'); }
+}
+
+async function disconnectWifi(){
+  if(!confirm('确定断开当前 WiFi 并回到热点模式吗？')) return;
+  try {
+    const res = await fetch(API_BASE + '/api/disconnect-wifi', {method:'POST'});
+    const data = await res.json();
+    toast(data.message || '正在切换...');
+    setTimeout(loadNetwork, 5000);
+  } catch(e) { toast('❌ 操作失败'); }
+}
+
+// ==================== 工具函数 ====================
+function escapeHtml(str){
+  if(!str) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// 关闭模态（点击背景）
+document.getElementById('player-modal').addEventListener('click', function(e){
+  if(e.target === this) closePlayer();
+});
+
+// 关闭模态（ESC 键）
+document.addEventListener('keydown', function(e){
+  if(e.key === 'Escape') closePlayer();
+});
+
+// ==================== 启动 ====================
+refreshAll();
+setInterval(refreshAll, 10000);  // 每 10 秒自动刷新仪表盘
+</script>
+</body>
+</html>
