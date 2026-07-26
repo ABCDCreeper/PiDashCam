@@ -366,6 +366,8 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
                 self._handle_recording_state()
             elif path == "/api/osd":
                 self._handle_osd_messages()
+            elif path == "/api/known-plates":
+                self._handle_known_plates_get()
             elif path == "/favicon.ico":
                 self._send_error_json("", 404)
             else:
@@ -398,6 +400,10 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
                 self._handle_restart_hotspot(data)
             elif path == "/api/disconnect-wifi":
                 self._handle_disconnect_wifi()
+            elif path == "/api/known-plates":
+                self._handle_known_plates_post(data)
+            elif path == "/api/known-plates/delete":
+                self._handle_known_plates_post(data)
             else:
                 self._send_error_json(f"未知接口: {path}", 404)
         except Exception as e:
@@ -563,6 +569,63 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
             "per_page": per_page,
             "total_pages": max(1, (total + per_page - 1) // per_page),
         })
+
+    # ---- 已知车牌管理 ----
+
+    def _known_plates_path(self):
+        """已知车牌配置文件路径（优先 U 盘，回退系统盘）"""
+        worker = self.camera_worker
+        if worker and worker.storage_path:
+            return os.path.join(worker.storage_path, "known_plates.json")
+        return os.path.expanduser("~/Videos/known_plates.json")
+
+    def _load_known_plates(self):
+        path = self._known_plates_path()
+        try:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    def _save_known_plates(self, data):
+        path = self._known_plates_path()
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            # 同步更新 CameraWorker 缓存
+            if self.camera_worker:
+                self.camera_worker.known_plates = data.copy()
+        except Exception as e:
+            print(f"⚠️ 保存已知车牌失败: {e}")
+
+    def _handle_known_plates_get(self):
+        self._send_json(self._load_known_plates())
+
+    def _handle_known_plates_post(self, data):
+        action = data.get("action", "add")
+        plate = data.get("plate", "").strip().upper()
+        if not plate:
+            self._send_error_json("车牌号不能为空", 400)
+            return
+
+        known = self._load_known_plates()
+
+        if action == "delete":
+            if plate in known:
+                del known[plate]
+                self._save_known_plates(known)
+                self._send_json({"success": True, "message": f"已删除 {plate}"})
+            else:
+                self._send_error_json(f"未找到 {plate}", 404)
+        else:
+            nickname = data.get("nickname", "").strip()
+            known[plate] = nickname
+            self._save_known_plates(known)
+            label = f"{nickname}({plate})" if nickname else plate
+            self._send_json({"success": True, "message": f"已保存 {label}"})
 
     def _handle_snapshot(self):
         """生成当前摄像头的 JPEG 快照"""

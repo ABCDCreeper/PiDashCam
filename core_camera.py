@@ -293,6 +293,7 @@ class CameraWorker(QObject):
         self.last_detect_time = 0
         self.last_infer_time = 0
         self.last_log_time = 0
+        self.known_plates = {}  # 已知车牌映射 {plate: nickname}，web_server 会同步更新
         
         self._restart_camera = False  # 切换参数时通知 _loop 重启摄像头
         self._writer_lock = threading.RLock()  # 保护 _encoder_proc 跨线程访问（可重入）
@@ -320,6 +321,7 @@ class CameraWorker(QObject):
             self.fps_target = vp.get("fps", self.fps_target)
         # 启动时检测 U 盘：有则自动切换
         self._auto_select_usb()
+        self._reload_known_plates()
         
         # GPS 模块（微雪 L76X，GPIO 串口）
         self.gps = GPSWorker()
@@ -692,7 +694,11 @@ class CameraWorker(QObject):
             for plate_text, plate_conf, plate_box, _ in self.plates:
                 x1, y1, x2, y2 = [v * 2 for v in plate_box]
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                parts.append(f"📷 {plate_text} ({plate_conf:.2f})")
+                nickname = self.known_plates.get(plate_text, "")
+                if nickname:
+                    parts.append(f"📷 {nickname}({plate_text})")
+                else:
+                    parts.append(f"📷 {plate_text} ({plate_conf:.2f})")
             osd_text = "\n".join(parts)
 
         # 预览帧缩小至 1/4 像素（640×360 @ 1080p），大幅减少 QImage 开销
@@ -884,7 +890,8 @@ class CameraWorker(QObject):
                 "height": self.height,
                 "fps": self.fps_target
             },
-            "wifi_passwords.json": {}
+            "wifi_passwords.json": {},
+            "known_plates.json": {}
         }
         for filename, default in configs.items():
             filepath = os.path.join(path, filename)
@@ -895,6 +902,20 @@ class CameraWorker(QObject):
                     print(f"📄 已创建配置文件: {filename}")
                 except Exception as e:
                     print(f"⚠️ 无法创建 {filename}: {e}")
+
+    def _reload_known_plates(self):
+        """从文件加载已知车牌映射（优先 U 盘，回退系统盘）"""
+        if self.storage_path:
+            cfg = os.path.join(self.storage_path, "known_plates.json")
+        else:
+            cfg = os.path.expanduser("~/Videos/known_plates.json")
+        try:
+            if os.path.exists(cfg):
+                with open(cfg, "r", encoding="utf-8") as f:
+                    self.known_plates = json.load(f)
+                    print(f"📋 已加载 {len(self.known_plates)} 个已知车牌")
+        except Exception:
+            pass
 
     def _load_video_params(self):
         """读取用户手动设置并保存的视频参数（优先 U 盘）"""

@@ -191,6 +191,7 @@ main{padding:12px;max-width:960px;margin:0 auto}
   <button class="active" data-page="dashboard">📊 仪表盘</button>
   <button data-page="videos">🎬 视频</button>
   <button data-page="plates">🚗 车牌日志</button>
+  <button data-page="known-plates">📋 已知车牌</button>
   <button data-page="network">🌐 网络</button>
 </nav>
 
@@ -274,6 +275,28 @@ main{padding:12px;max-width:960px;margin:0 auto}
         </table>
       </div>
       <div class="pagination" id="plate-pagination"></div>
+    </div>
+  </div>
+
+  <!-- ========== 已知车牌管理 ========== -->
+  <div class="page" id="page-known-plates">
+    <div class="card">
+      <h2><span class="emoji">➕</span> 添加已知车牌</h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+        <div style="flex:1;min-width:120px">
+          <label style="font-size:12px;color:var(--dim)">车牌号 *</label>
+          <input id="kp-plate" type="text" placeholder="如：沪A12345" style="width:100%;padding:10px;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:15px;text-transform:uppercase" maxlength="10">
+        </div>
+        <div style="flex:2;min-width:150px">
+          <label style="font-size:12px;color:var(--dim)">昵称（可选）</label>
+          <input id="kp-nickname" type="text" placeholder="如：张三的车" style="width:100%;padding:10px;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:15px" maxlength="20">
+        </div>
+        <button class="btn btn-primary" onclick="addKnownPlate()" style="min-width:80px">💾 保存</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2><span class="emoji">📋</span> 已知车牌列表 <span id="kp-count" style="font-size:13px;color:var(--dim)"></span></h2>
+      <div id="kp-list" style="font-size:14px;color:var(--dim);text-align:center;padding:12px">加载中...</div>
     </div>
   </div>
 
@@ -641,6 +664,71 @@ document.addEventListener('keydown', function(e){
 });
 
 // ==================== 启动 ====================
+
+// ==================== 已知车牌管理 ====================
+async function loadKnownPlates(){
+  try {
+    const res = await fetch(API_BASE + '/api/known-plates');
+    const data = await res.json();
+    const listDiv = document.getElementById('kp-list');
+    const countEl = document.getElementById('kp-count');
+    const entries = Object.entries(data);
+    countEl.textContent = '(共 ' + entries.length + ' 个)';
+    if (entries.length === 0){
+      listDiv.innerHTML = '<div style="color:var(--dim);padding:16px">暂无已知车牌，请在上方添加</div>';
+      return;
+    }
+    listDiv.innerHTML = entries.map(([plate, nickname]) => `
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
+        <div>
+          <span style="font-weight:700;font-size:16px;color:var(--title)">${escapeHtml(plate)}</span>
+          ${nickname ? '<span style="color:var(--text);margin-left:8px;font-size:14px">' + escapeHtml(nickname) + '</span>' : '<span style="color:var(--dim);margin-left:8px;font-size:12px">(无昵称)</span>'}
+        </div>
+        <button class="btn btn-danger btn-sm" onclick="deleteKnownPlate('${escapeHtml(plate)}')">🗑 删除</button>
+      </div>
+    `).join('');
+  } catch(e) {
+    document.getElementById('kp-list').innerHTML = '<div style="color:var(--red);padding:16px">加载失败</div>';
+  }
+}
+
+async function addKnownPlate(){
+  const plate = document.getElementById('kp-plate').value.trim().toUpperCase();
+  const nickname = document.getElementById('kp-nickname').value.trim();
+  if (!plate) {
+    toast('⚠️ 请输入车牌号');
+    return;
+  }
+  try {
+    const res = await fetch(API_BASE + '/api/known-plates', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action:'add', plate, nickname})
+    });
+    const data = await res.json();
+    toast(data.message || '保存成功');
+    document.getElementById('kp-plate').value = '';
+    document.getElementById('kp-nickname').value = '';
+    loadKnownPlates();
+  } catch(e) {
+    toast('❌ 保存失败');
+  }
+}
+
+async function deleteKnownPlate(plate){
+  if (!confirm('确定删除 ' + plate + ' 吗？')) return;
+  try {
+    const res = await fetch(API_BASE + '/api/known-plates/delete', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action:'delete', plate})
+    });
+    const data = await res.json();
+    toast(data.message || '已删除');
+    loadKnownPlates();
+  } catch(e) { toast('❌ 删除失败'); }
+}
+
 refreshAll();
 setInterval(refreshAll, 10000);  // 每 10 秒自动刷新仪表盘
 </script>
