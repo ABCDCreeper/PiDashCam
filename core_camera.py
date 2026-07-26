@@ -412,6 +412,8 @@ class CameraWorker(QObject):
         now = time.time()
         if now - self.last_log_time >= 10.0:
             self.last_log_time = now
+            if not self.storage_path:
+                return
             log_file = os.path.join(self.storage_path, "plates_log.json")
             offset_sec = round(now - self.record_start_time, 1) if (self.is_recording and self.record_start_time > 0) else 0
             entry = {
@@ -575,125 +577,134 @@ class CameraWorker(QObject):
 
     def _loop(self):
         while self.running:
-            # 线程安全重启摄像头（由 apply_video_params 触发）
-            if self._restart_camera:
-                self._restart_camera = False
-                was_recording = self.is_recording
-                # 1. 安全停止录制
-                self.is_recording = False
-                with self._writer_lock:
-                    if self._encoder_proc:
-                        self._close_encoder()
-                        self.current_video_filename = ""
-                if was_recording:
-                    self.recording_toggled.emit(False)
-                # 2. 重启摄像头
-                if self.cap and self.cap.isOpened():
-                    self.cap.release()
-                self.cap = cv2.VideoCapture(0)
-                self.cap.set(cv2.CAP_PROP_FOURCC, 1196444237)  # MJPG
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-                # 3. 恢复录制
-                if was_recording:
-                    self.is_recording = True
-                    self.recording_toggled.emit(True)
-                continue
-            
-            if self.is_playback and self.playback_file:
-                self._run_playback()
-                continue
-                
-            if self.cap is None or not self.cap.isOpened():
-                time.sleep(0.2)
-                continue
-            ret, frame = self.cap.read()
-            if not ret:
-                time.sleep(0.01)
-                continue
-            
-            self._frame_count += 1
-            current_time = time.time()
+            try:
+                self._loop_tick()
+            except Exception:
+                import traceback
+                print("❌ _loop 线程异常，1 秒后恢复:")
+                traceback.print_exc()
+                time.sleep(1.0)
 
-            # —— OSD 每帧都绘制（避免闪烁） ——
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.85
-            thickness_bg = 5
-            thickness_fg = 2
-            
-            (text_w, text_h), _ = cv2.getTextSize(now_str, font, font_scale, thickness_bg)
-            x_pos = self.width - text_w - 20
-            y_pos = self.height - 20
+    def _loop_tick(self):
+        # 线程安全重启摄像头（由 apply_video_params 触发）
+        if self._restart_camera:
+            self._restart_camera = False
+            was_recording = self.is_recording
+            # 1. 安全停止录制
+            self.is_recording = False
+            with self._writer_lock:
+                if self._encoder_proc:
+                    self._close_encoder()
+                    self.current_video_filename = ""
+            if was_recording:
+                self.recording_toggled.emit(False)
+            # 2. 重启摄像头
+            if self.cap and self.cap.isOpened():
+                self.cap.release()
+            self.cap = cv2.VideoCapture(0)
+            self.cap.set(cv2.CAP_PROP_FOURCC, 1196444237)  # MJPG
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+            # 3. 恢复录制
+            if was_recording:
+                self.is_recording = True
+                self.recording_toggled.emit(True)
+            return
 
-            gps = self.gps_data
-            if gps.get("serial_error") is None:
-                if gps.get("has_fix"):
-                    lat = gps["latitude"]
-                    lon = gps["longitude"]
-                    lat_hemi = "N" if lat >= 0 else "S"
-                    lon_hemi = "E" if lon >= 0 else "W"
-                    gps_str = f"{abs(lat):.5f}°{lat_hemi}  {abs(lon):.5f}°{lon_hemi}"
-                    gps_scale = 0.55
-                    (gw, _), _ = cv2.getTextSize(gps_str, font, gps_scale, 4)
-                    cv2.putText(frame, gps_str, (self.width - gw - 20, y_pos - 28),
-                                font, gps_scale, (0, 0, 0), 4, cv2.LINE_8)
-                    cv2.putText(frame, gps_str, (self.width - gw - 20, y_pos - 28),
-                                font, gps_scale, (255, 255, 255), 1, cv2.LINE_AA)
-                    info_str = f"{gps['satellites']} sat  {gps['speed_kmh']:.0f} km/h"
-                    cv2.putText(frame, info_str, (20, 108), font, 0.5, (0, 0, 0), 4, cv2.LINE_8)
-                    cv2.putText(frame, info_str, (20, 108), font, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
-                else:
-                    cv2.putText(frame, "GPS: No Fix", (x_pos, y_pos - 28),
-                                font, 0.5, (0, 0, 0), 4, cv2.LINE_8)
-                    cv2.putText(frame, "GPS: No Fix", (x_pos, y_pos - 28),
-                                font, 0.5, (128, 128, 128), 1, cv2.LINE_AA)
+        if self.is_playback and self.playback_file:
+            self._run_playback()
+            return
 
-            cv2.putText(frame, now_str, (x_pos, y_pos), font, font_scale, (0, 0, 0), thickness_bg, cv2.LINE_8)
-            cv2.putText(frame, now_str, (x_pos, y_pos), font, font_scale, (255, 255, 255), thickness_fg, cv2.LINE_AA)
-            
-            if self.is_recording:
-                elapsed = int(time.time() - self.record_start_time)
-                cv2.circle(frame, (40, 40), 12, (0, 0, 255), -1)
-                cv2.putText(frame, f"REC {elapsed}s", (60, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
-                try:
-                    self._handle_recording(frame)
-                except Exception:
-                    pass
+        if self.cap is None or not self.cap.isOpened():
+            time.sleep(0.2)
+            return
+        ret, frame = self.cap.read()
+        if not ret:
+            time.sleep(0.01)
+            return
+
+        self._frame_count += 1
+        current_time = time.time()
+
+        # —— OSD 每帧都绘制（避免闪烁） ——
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.85
+        thickness_bg = 5
+        thickness_fg = 2
+
+        (text_w, text_h), _ = cv2.getTextSize(now_str, font, font_scale, thickness_bg)
+        x_pos = self.width - text_w - 20
+        y_pos = self.height - 20
+
+        gps = self.gps_data
+        if gps.get("serial_error") is None:
+            if gps.get("has_fix"):
+                lat = gps["latitude"]
+                lon = gps["longitude"]
+                lat_hemi = "N" if lat >= 0 else "S"
+                lon_hemi = "E" if lon >= 0 else "W"
+                gps_str = f"{abs(lat):.5f}°{lat_hemi}  {abs(lon):.5f}°{lon_hemi}"
+                gps_scale = 0.55
+                (gw, _), _ = cv2.getTextSize(gps_str, font, gps_scale, 4)
+                cv2.putText(frame, gps_str, (self.width - gw - 20, y_pos - 28),
+                            font, gps_scale, (0, 0, 0), 4, cv2.LINE_8)
+                cv2.putText(frame, gps_str, (self.width - gw - 20, y_pos - 28),
+                            font, gps_scale, (255, 255, 255), 1, cv2.LINE_AA)
+                info_str = f"{gps['satellites']} sat  {gps['speed_kmh']:.0f} km/h"
+                cv2.putText(frame, info_str, (20, 108), font, 0.5, (0, 0, 0), 4, cv2.LINE_8)
+                cv2.putText(frame, info_str, (20, 108), font, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
             else:
-                if self._encoder_proc is not None:
-                    self.stop_recording_file()
-                
-            cv2.putText(frame, "AI Status: ON (>0.85)", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(frame, "GPS: No Fix", (x_pos, y_pos - 28),
+                            font, 0.5, (0, 0, 0), 4, cv2.LINE_8)
+                cv2.putText(frame, "GPS: No Fix", (x_pos, y_pos - 28),
+                            font, 0.5, (128, 128, 128), 1, cv2.LINE_AA)
 
-            # LPR 识别跳帧执行（节省 CPU 用于预览）
-            if self._frame_count % 3 == 0:
-                if self.lpr_catcher and not self.lpr_busy and (current_time - self.last_infer_time > 0.8):
-                    small_frame = cv2.resize(frame, (self.width // 2, self.height // 2))
-                    threading.Thread(target=self._lpr_task, args=(small_frame,), daemon=True).start()
+        cv2.putText(frame, now_str, (x_pos, y_pos), font, font_scale, (0, 0, 0), thickness_bg, cv2.LINE_8)
+        cv2.putText(frame, now_str, (x_pos, y_pos), font, font_scale, (255, 255, 255), thickness_fg, cv2.LINE_AA)
 
-            osd_text = ""
-            if self.plates and (current_time - self.last_detect_time < 2.5):
-                parts = []
-                for plate_text, plate_conf, plate_box, _ in self.plates:
-                    x1, y1, x2, y2 = [v * 2 for v in plate_box]
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                    parts.append(f"📷 {plate_text} ({plate_conf:.2f})")
-                osd_text = "\n".join(parts)
-            
-            # 预览帧缩小至 1/4 像素（640×360 @ 1080p），大幅减少 QImage 开销
-            preview_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5, interpolation=cv2.INTER_LINEAR)
-            rgb_frame = cv2.cvtColor(preview_frame, cv2.COLOR_BGR2RGB)
-            h, w, ch = rgb_frame.shape
-            q_img = QImage(rgb_frame.data, w, h, ch * w, QImage.Format_RGB888).copy()
-            
-            self.frame_ready.emit(q_img, osd_text)
-            
-            # 每 3 秒检测一次 U 盘热插拔
-            if self._frame_count % (self.fps_target * 3) == 0:
-                self._auto_select_usb()
-            
-            time.sleep(1.0 / self.fps_target)
+        if self.is_recording:
+            elapsed = int(time.time() - self.record_start_time)
+            cv2.circle(frame, (40, 40), 12, (0, 0, 255), -1)
+            cv2.putText(frame, f"REC {elapsed}s", (60, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+            try:
+                self._handle_recording(frame)
+            except Exception:
+                pass
+        else:
+            if self._encoder_proc is not None:
+                self.stop_recording_file()
+
+        cv2.putText(frame, "AI Status: ON (>0.85)", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+        # LPR 识别跳帧执行（节省 CPU 用于预览）
+        if self._frame_count % 3 == 0:
+            if self.lpr_catcher and not self.lpr_busy and (current_time - self.last_infer_time > 0.8):
+                small_frame = cv2.resize(frame, (self.width // 2, self.height // 2))
+                threading.Thread(target=self._lpr_task, args=(small_frame,), daemon=True).start()
+
+        osd_text = ""
+        if self.plates and (current_time - self.last_detect_time < 2.5):
+            parts = []
+            for plate_text, plate_conf, plate_box, _ in self.plates:
+                x1, y1, x2, y2 = [v * 2 for v in plate_box]
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                parts.append(f"📷 {plate_text} ({plate_conf:.2f})")
+            osd_text = "\n".join(parts)
+
+        # 预览帧缩小至 1/4 像素（640×360 @ 1080p），大幅减少 QImage 开销
+        preview_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5, interpolation=cv2.INTER_LINEAR)
+        rgb_frame = cv2.cvtColor(preview_frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb_frame.shape
+        q_img = QImage(rgb_frame.data, w, h, ch * w, QImage.Format_RGB888).copy()
+
+        self.frame_ready.emit(q_img, osd_text)
+
+        # 每 3 秒检测一次 U 盘热插拔
+        if self._frame_count % (self.fps_target * 3) == 0:
+            self._auto_select_usb()
+
+        time.sleep(1.0 / self.fps_target)
                 
     def _handle_recording(self, frame):
         # 未检测到 U 盘（且无待切换路径）：停止录制
