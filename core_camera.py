@@ -249,11 +249,12 @@ class SystemUtils:
         try:
             # 获取当前存在的 sd 设备列表
             live = set()
-            for dev in glob.glob("/dev/sd[a-z]"):
+            for dev in glob.glob("/dev/sd[a-z]*"):
                 live.add(dev.split("/")[-1])
             for d in glob.glob("/mnt/usb_sd*"):
                 devname = d.split("_", 1)[-1]
-                if devname not in live:
+                # 设备不在线 且 挂载点已卸载，才安全清理
+                if devname not in live and not os.path.ismount(d):
                     # 设备已不存在 → 强制卸载并删除目录
                     sp.run(["sudo", "umount", "-l", d], capture_output=True)
                     sp.run(["sudo", "rm", "-rf", d], capture_output=True)
