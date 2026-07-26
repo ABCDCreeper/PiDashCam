@@ -159,10 +159,7 @@ class SystemUtils:
     @staticmethod
     def get_storage_devices():
         devices = []
-        
-        # 清理已拔出 USB 留下的废弃挂载目录
-        SystemUtils._cleanup_stale_mounts()
-        
+
         try:
             cmd = ["lsblk", "-o", "NAME,LABEL,MOUNTPOINT,TRAN,RM,PKNAME,TYPE", "-J"]
             res = sp.run(cmd, capture_output=True, text=True)
@@ -244,20 +241,22 @@ class SystemUtils:
 
     @staticmethod
     def _cleanup_stale_mounts():
-        """卸载并删除已不存在的 USB 设备对应的 /mnt/usb_* 目录"""
+        """启动时清理已拔出 USB 遗留的挂载点（只卸载，不删除目录以免误删数据）"""
         import glob
         try:
-            # 获取当前存在的 sd 设备列表
             live = set()
-            for dev in glob.glob("/dev/sd[a-z]*"):
+            for dev in glob.glob("/dev/sd[a-z][0-9]*"):
                 live.add(dev.split("/")[-1])
             for d in glob.glob("/mnt/usb_sd*"):
                 devname = d.split("_", 1)[-1]
-                # 设备不在线 且 挂载点已卸载，才安全清理
-                if devname not in live and not os.path.ismount(d):
-                    # 设备已不存在 → 强制卸载并删除目录
+                if devname not in live:
                     sp.run(["sudo", "umount", "-l", d], capture_output=True)
-                    sp.run(["sudo", "rm", "-rf", d], capture_output=True)
+                    # 只清理空目录，有内容的绝不动
+                    try:
+                        if not os.listdir(d):
+                            sp.run(["sudo", "rmdir", d], capture_output=True)
+                    except Exception:
+                        pass
                     print(f"🧹 已清理废弃挂载: {d}")
         except Exception:
             pass
@@ -308,6 +307,9 @@ class CameraWorker(QObject):
         
         # 检测硬件编码器（h264_v4l2m2m），不可用则回退到 ffmpeg libx264
         self._hw_encoder = self._detect_hw_encoder()
+        
+        # 启动时清理一次废弃挂载（仅一次，避免运行时误删）
+        SystemUtils._cleanup_stale_mounts()
         
         # 启动时恢复上一次的 USB 存储位置
         saved = self._load_storage_config()
