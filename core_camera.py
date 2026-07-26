@@ -451,9 +451,10 @@ class CameraWorker(QObject):
                             text = plate[0]
                             box = [int(v) for v in plate[3]]
                             new_plates.append((text, conf, box, now))
-                            self._log_plate_to_json(text, conf)
                     # 多车牌时只保留置信度最高的 3 个
                     new_plates = sorted(new_plates, key=lambda p: p[1], reverse=True)[:3]
+                    for text, conf, *_ in new_plates:
+                        self._log_plate_to_json(text, conf)
                     if new_plates:
                         self.plates = new_plates
                         self.last_detect_time = now
