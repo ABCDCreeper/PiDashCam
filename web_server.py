@@ -593,8 +593,11 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
         path = self._known_plates_path()
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
+            # 原子写入：先写临时文件再 rename，防止断电/并发导致文件损坏
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)
             # 同步更新 CameraWorker 缓存
             if self.camera_worker:
                 self.camera_worker.known_plates = data.copy()

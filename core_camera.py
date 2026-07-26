@@ -297,6 +297,7 @@ class CameraWorker(QObject):
         
         self._restart_camera = False  # 切换参数时通知 _loop 重启摄像头
         self._writer_lock = threading.RLock()  # 保护 _encoder_proc 跨线程访问（可重入）
+        self._plates_lock = threading.Lock()   # 保护 plates_log.json 并发写入
         self._segment_frame_count = 0  # 当前录制段帧数计数
         self._total_recorded_frames = 0  # 累计录制帧数
         self._recording_start_time = 0.0  # 录制开始墙钟时间
@@ -427,14 +428,18 @@ class CameraWorker(QObject):
                 "video_offset_sec": offset_sec
             }
             try:
-                data = []
-                if os.path.exists(log_file):
-                    with open(log_file, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                data.append(entry)
-                if len(data) > 3000: data = data[-3000:]
-                with open(log_file, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
+                with self._plates_lock:
+                    data = []
+                    if os.path.exists(log_file):
+                        with open(log_file, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                    data.append(entry)
+                    if len(data) > 3000: data = data[-3000:]
+                    # 原子写入：先写临时文件再 rename，防止断电/并发导致文件损坏
+                    tmp = log_file + ".tmp"
+                    with open(tmp, "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+                    os.replace(tmp, log_file)
             except Exception:
                 pass
 
