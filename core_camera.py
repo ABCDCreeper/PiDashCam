@@ -451,8 +451,8 @@ class CameraWorker(QObject):
                             text = plate[0]
                             box = [int(v) for v in plate[3]]
                             new_plates.append((text, conf, box, now))
-                    # 多车牌时只保留置信度最高的 3 个
-                    new_plates = sorted(new_plates, key=lambda p: p[1], reverse=True)[:3]
+                    # 多车牌时只保留框面积最大的 3 个（节省树莓派 CPU）
+                    new_plates = sorted(new_plates, key=lambda p: (p[2][2]-p[2][0])*(p[2][3]-p[2][1]), reverse=True)[:3]
                     for text, conf, *_ in new_plates:
                         self._log_plate_to_json(text, conf)
                     if new_plates:
