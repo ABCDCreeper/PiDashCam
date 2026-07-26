@@ -755,6 +755,7 @@ class CameraWorker(QObject):
                 self.storage_notify.emit(f"✅ 已切换至新盘: {self.storage_path}")
                 self.storage_path_changed.emit(self.storage_path)
                 print(f"✅ 存储路径已切换至: {self.storage_path}")
+                self._init_storage_configs(self.storage_path)
                 
             self.record_start_time = now
             print(f"🎬 开始录制新分段: {filepath} [{self._hw_encoder or 'libx264'}]")
@@ -870,6 +871,27 @@ class CameraWorker(QObject):
                 json.dump({"storage_path": path}, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
+
+    def _init_storage_configs(self, path):
+        """U 盘切换后自动初始化缺失的配置文件，确保存储就绪"""
+        configs = {
+            "plates_log.json": [],
+            "video_params.json": {
+                "width": self.width,
+                "height": self.height,
+                "fps": self.fps_target
+            },
+            "wifi_passwords.json": {}
+        }
+        for filename, default in configs.items():
+            filepath = os.path.join(path, filename)
+            if not os.path.exists(filepath):
+                try:
+                    with open(filepath, "w", encoding="utf-8") as f:
+                        json.dump(default, f, ensure_ascii=False, indent=2)
+                    print(f"📄 已创建配置文件: {filename}")
+                except Exception as e:
+                    print(f"⚠️ 无法创建 {filename}: {e}")
 
     def _load_video_params(self):
         """读取用户手动设置并保存的视频参数（优先 U 盘）"""
