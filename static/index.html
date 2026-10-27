@@ -7,10 +7,10 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
-  --bg:#0a0a0f;--card:#151520;--border:#2a2a3a;
-  --accent:#0073e6;--green:#27ae60;--red:#e74c3c;
-  --text:#ddd;--dim:#888;--title:#00aaff;
-  --radius:10px;--transition:0.2s ease;
+  --bg:#101214;--card:#191c20;--border:#30353b;
+  --accent:#526d8a;--green:#739783;--red:#bf7373;
+  --text:#ddd;--dim:#888;--title:#a5b9cc;
+  --radius:6px;--transition:0.2s ease;
 }
 body{
   background:var(--bg);color:var(--text);
@@ -37,7 +37,7 @@ header .status-dot.idle{background:var(--dim)}
 nav{display:flex;gap:4px;overflow-x:auto;white-space:nowrap;padding:8px 12px;background:var(--card);border-bottom:1px solid var(--border)}
 nav button{
   background:none;border:none;color:var(--dim);font-size:15px;font-weight:600;
-  padding:8px 18px;border-radius:20px;transition:var(--transition);cursor:pointer;
+  padding:8px 18px;border-radius:5px;transition:var(--transition);cursor:pointer;
 }
 nav button.active,nav button:hover{background:var(--accent);color:#fff}
 
@@ -69,7 +69,7 @@ main{padding:12px;max-width:960px;margin:0 auto}
 /* ---- 按钮 ---- */
 .btn{
   display:inline-flex;align-items:center;gap:6px;
-  padding:10px 20px;border:none;border-radius:20px;
+  padding:10px 20px;border:none;border-radius:5px;
   font-size:14px;font-weight:600;cursor:pointer;
   transition:var(--transition);color:#fff;
 }
@@ -112,7 +112,7 @@ main{padding:12px;max-width:960px;margin:0 auto}
 }
 .search-bar input{
   flex:1;padding:10px 14px;background:rgba(255,255,255,0.05);
-  border:1px solid var(--border);border-radius:20px;color:var(--text);font-size:14px;
+  border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:14px;
   outline:none;transition:var(--transition);
 }
 .search-bar input:focus{border-color:var(--accent)}
@@ -156,7 +156,7 @@ main{padding:12px;max-width:960px;margin:0 auto}
 .toast{
   position:fixed;top:16px;left:50%;transform:translateX(-50%);
   background:var(--accent);color:#fff;padding:10px 24px;
-  border-radius:20px;font-size:14px;font-weight:600;
+  border-radius:5px;font-size:14px;font-weight:600;
   z-index:300;opacity:0;transition:opacity 0.3s;
   pointer-events:none;
 }
@@ -179,7 +179,7 @@ main{padding:12px;max-width:960px;margin:0 auto}
 
 <!-- 顶部 -->
 <header>
-  <div class="logo">🚗 车缘 <span class="dot">·</span> DashCam</div>
+  <div class="logo"> 车缘 <span class="dot">·</span> DashCam</div>
   <div style="display:flex;align-items:center;gap:8px">
     <span id="rec-dot" class="status-dot idle"></span>
     <span id="header-status" style="font-size:13px;color:var(--dim)">加载中...</span>
@@ -188,11 +188,11 @@ main{padding:12px;max-width:960px;margin:0 auto}
 
 <!-- 导航 -->
 <nav>
-  <button class="active" data-page="dashboard">📊 仪表盘</button>
-  <button data-page="videos">🎬 视频</button>
-  <button data-page="plates">🚗 车牌日志</button>
-  <button data-page="known-plates">📋 已知车牌</button>
-  <button data-page="network">🌐 网络</button>
+  <button class="active" data-page="dashboard"> 仪表盘</button>
+  <button data-page="videos"> 视频</button>
+  <button data-page="plates"> 车牌日志</button>
+  <button data-page="known-plates"> 已知车牌</button>
+  <button data-page="network"> 网络</button>
 </nav>
 
 <main>
@@ -208,24 +208,24 @@ main{padding:12px;max-width:960px;margin:0 auto}
     </div>
 
     <div class="card">
-      <h2><span class="emoji">🎛️</span> 快捷操作</h2>
+      <h2>快捷操作</h2>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-success" id="btn-record-toggle" onclick="toggleRecording()">● 开始录像</button>
-        <button class="btn btn-outline btn-sm" onclick="refreshAll()">🔄 刷新状态</button>
+        <button class="btn btn-success" id="btn-record-toggle" onclick="toggleRecording()">开始录像</button>
+        <button class="btn btn-outline btn-sm" onclick="refreshAll()"> 刷新状态</button>
       </div>
     </div>
 
     <div class="card">
-      <h2><span class="emoji">📷</span> 实时画面快照</h2>
+      <h2>实时画面快照</h2>
       <div class="snapshot-container">
-        <img id="snapshot-img" src="" alt="摄像头快照" style="display:none" onerror="this.style.display='none';document.getElementById('snapshot-hint').textContent='⚠️ 无法获取快照'">
+        <img id="snapshot-img" src="" alt="摄像头快照" style="display:none" onerror="this.style.display='none';document.getElementById('snapshot-hint').textContent=' 无法获取快照'">
         <div id="snapshot-hint" class="refresh-hint">点击下方按钮获取实时画面</div>
-        <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="refreshSnapshot()">📸 获取快照</button>
+        <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="refreshSnapshot()"> 获取快照</button>
       </div>
     </div>
 
     <div class="card">
-      <h2><span class="emoji">📋</span> 系统日志</h2>
+      <h2>系统日志</h2>
       <div id="osd-log" style="font-size:12px;color:var(--dim);max-height:200px;overflow-y:auto;font-family:monospace;line-height:1.6">
         <div>等待日志...</div>
       </div>
@@ -235,10 +235,10 @@ main{padding:12px;max-width:960px;margin:0 auto}
   <!-- ========== 视频管理 ========== -->
   <div class="page" id="page-videos">
     <div class="card">
-      <h2><span class="emoji">🎬</span> 录像文件列表 <span id="video-count" style="font-size:13px;color:var(--dim)"></span></h2>
+      <h2>录像文件列表 <span id="video-count" style="font-size:13px;color:var(--dim)"></span></h2>
       <div style="display:flex;gap:8px;margin-bottom:12px">
-        <button class="btn btn-outline btn-sm" onclick="loadVideos()">🔄 刷新列表</button>
-        <button class="btn btn-outline btn-sm" onclick="bulkDownload()">📥 批量下载提示</button>
+        <button class="btn btn-outline btn-sm" onclick="loadVideos()"> 刷新列表</button>
+        <button class="btn btn-outline btn-sm" onclick="bulkDownload()"> 批量下载提示</button>
       </div>
       <div class="video-list" id="video-list">
         <div style="color:var(--dim);text-align:center;padding:24px">加载中...</div>
@@ -250,7 +250,7 @@ main{padding:12px;max-width:960px;margin:0 auto}
       <div class="modal-content">
         <div class="modal-header">
           <span id="player-title">视频播放</span>
-          <button onclick="closePlayer()">✕</button>
+          <button onclick="closePlayer()"></button>
         </div>
         <video id="player-video" controls autoplay></video>
       </div>
@@ -260,9 +260,9 @@ main{padding:12px;max-width:960px;margin:0 auto}
   <!-- ========== 车牌日志 ========== -->
   <div class="page" id="page-plates">
     <div class="card">
-      <h2><span class="emoji">🚗</span> AI 车牌识别日志</h2>
+      <h2>车牌记录</h2>
       <div class="search-bar">
-        <input type="text" id="plate-search" placeholder="🔍 搜索车牌号（如：沪A）..." oninput="loadPlates(1)">
+        <input type="text" id="plate-search" placeholder=" 搜索车牌号（如：沪A）..." oninput="loadPlates(1)">
       </div>
       <div style="overflow-x:auto">
         <table class="plate-table">
@@ -281,7 +281,7 @@ main{padding:12px;max-width:960px;margin:0 auto}
   <!-- ========== 已知车牌管理 ========== -->
   <div class="page" id="page-known-plates">
     <div class="card">
-      <h2><span class="emoji">➕</span> 添加已知车牌</h2>
+      <h2>添加已知车牌</h2>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
         <div style="flex:1;min-width:120px">
           <label style="font-size:12px;color:var(--dim)">车牌号 *</label>
@@ -291,11 +291,11 @@ main{padding:12px;max-width:960px;margin:0 auto}
           <label style="font-size:12px;color:var(--dim)">昵称（可选）</label>
           <input id="kp-nickname" type="text" placeholder="如：张三的车" style="width:100%;padding:10px;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:15px" maxlength="20">
         </div>
-        <button class="btn btn-primary" onclick="addKnownPlate()" style="min-width:80px">💾 保存</button>
+        <button class="btn btn-primary" onclick="addKnownPlate()" style="min-width:80px"> 保存</button>
       </div>
     </div>
     <div class="card">
-      <h2><span class="emoji">📋</span> 已知车牌列表 <span id="kp-count" style="font-size:13px;color:var(--dim)"></span></h2>
+      <h2>已知车牌列表 <span id="kp-count" style="font-size:13px;color:var(--dim)"></span></h2>
       <div id="kp-list" style="font-size:14px;color:var(--dim);text-align:center;padding:12px">加载中...</div>
     </div>
   </div>
@@ -303,24 +303,24 @@ main{padding:12px;max-width:960px;margin:0 auto}
   <!-- ========== 网络状态 ========== -->
   <div class="page" id="page-network">
     <div class="card">
-      <h2><span class="emoji">🌐</span> 网络状态</h2>
+      <h2>网络状态</h2>
       <div id="network-info" style="line-height:2;font-size:14px">
         <div>加载中...</div>
       </div>
     </div>
     <div class="card">
-      <h2><span class="emoji">⚡</span> 网络操作</h2>
+      <h2>网络操作</h2>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-outline btn-sm" onclick="restartHotspot()">🔄 重启热点</button>
-        <button class="btn btn-outline btn-sm" onclick="disconnectWifi()">🔌 断开 WiFi（回热点）</button>
+        <button class="btn btn-outline btn-sm" onclick="restartHotspot()"> 重启热点</button>
+        <button class="btn btn-outline btn-sm" onclick="disconnectWifi()"> 断开 WiFi（回热点）</button>
       </div>
     </div>
     <div class="card">
-      <h2><span class="emoji">📱</span> 连接说明</h2>
+      <h2>连接说明</h2>
       <div style="font-size:13px;color:var(--dim);line-height:1.8">
-        <p>🔹 <b>热点模式</b>：手机/电脑连接 WiFi <b>Pi-Dashcam</b>，浏览器打开上面显示的地址。</p>
-        <p>🔹 <b>WiFi 客户端模式</b>：树莓派连接家中 WiFi 后，同局域网内任意设备均可访问。</p>
-        <p>🔹 <b>SSH 管理</b>：<code>ssh pi@&lt;IP地址&gt;</code>（默认密码: raspberry）</p>
+        <p> <b>热点模式</b>：手机/电脑连接 WiFi <b>Pi-Dashcam</b>，浏览器打开上面显示的地址。</p>
+        <p> <b>WiFi 客户端模式</b>：树莓派连接家中 WiFi 后，同局域网内任意设备均可访问。</p>
+        <p> <b>SSH 管理</b>：<code>ssh pi@&lt;IP地址&gt;</code>（默认密码: raspberry）</p>
       </div>
     </div>
   </div>
@@ -427,7 +427,7 @@ function renderDashboard(data){
     btn.textContent = '■ 停止录像';
     btn.className = 'btn btn-danger';
   } else {
-    btn.textContent = '● 开始录像';
+    btn.textContent = '开始录像';
     btn.className = 'btn btn-success';
   }
 }
@@ -440,7 +440,7 @@ async function refreshSnapshot(){
   // 添加时间戳防缓存
   img.src = API_BASE + '/api/snapshot?t=' + Date.now();
   img.onload = () => { img.style.display = 'block'; hint.textContent = '实时画面快照（点击按钮刷新）'; };
-  img.onerror = () => { img.style.display = 'none'; hint.textContent = '⚠️ 无法获取快照（摄像头可能未就绪）'; };
+  img.onerror = () => { img.style.display = 'none'; hint.textContent = ' 无法获取快照（摄像头可能未就绪）'; };
 }
 
 async function loadOsdMessages(){
@@ -467,7 +467,7 @@ async function toggleRecording(){
     toast(data.message || (recordingActive ? '录像已停止' : '录像已启动'));
     setTimeout(refreshAll, 500);
   } catch(e) {
-    toast('❌ 操作失败：' + e.message);
+    toast(' 操作失败：' + e.message);
   }
 }
 
@@ -481,21 +481,21 @@ async function loadVideos(){
     document.getElementById('video-count').textContent = `(共 ${data.count} 个)`;
 
     if(!data.videos || data.videos.length === 0){
-      listDiv.innerHTML = '<div style="color:var(--dim);text-align:center;padding:24px">📭 暂无录像文件</div>';
+      listDiv.innerHTML = '<div style="color:var(--dim);text-align:center;padding:24px"> 暂无录像文件</div>';
       return;
     }
 
     listDiv.innerHTML = data.videos.map(v => `
       <div class="video-item">
-        <span class="v-icon">🎞️</span>
+        <span class="v-icon"></span>
         <div class="v-info">
           <div class="v-name">${escapeHtml(v.filename)}</div>
           <div class="v-meta">${v.size_mb} MB · ${v.mtime}</div>
         </div>
         <div class="v-actions">
           <button class="btn btn-primary btn-sm" onclick="playVideo('${escapeHtml(v.filename)}')">▶ 播放</button>
-          <button class="btn btn-outline btn-sm" onclick="downloadVideo('${escapeHtml(v.filename)}')">📥 下载</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteVideo('${escapeHtml(v.filename)}')">🗑️</button>
+          <button class="btn btn-outline btn-sm" onclick="downloadVideo('${escapeHtml(v.filename)}')"> 下载</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteVideo('${escapeHtml(v.filename)}')"></button>
         </div>
       </div>
     `).join('');
@@ -532,7 +532,7 @@ async function deleteVideo(filename){
     toast(data.message || '已删除');
     loadVideos();
   } catch(e) {
-    toast('❌ 删除失败');
+    toast(' 删除失败');
   }
 }
 
@@ -541,7 +541,7 @@ async function downloadVideo(filename){
   try {
     // 方案 1: fetch + Blob（支持进度显示，适用于桌面和 Android）
     const resp = await fetch(url);
-    if(!resp.ok){ toast('❌ 下载失败: ' + resp.status); return; }
+    if(!resp.ok){ toast(' 下载失败: ' + resp.status); return; }
     const blob = await resp.blob();
     const blobUrl = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -551,16 +551,16 @@ async function downloadVideo(filename){
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(blobUrl);
-    toast('📥 开始下载: ' + filename);
+    toast(' 开始下载: ' + filename);
   } catch(e){
     // 方案 2: fallback — 新标签页打开（iOS Safari 兼容）
-    toast('💡 正在打开下载...');
+    toast(' 正在打开下载...');
     window.open(url, '_blank');
   }
 }
 
 function bulkDownload(){
-  toast('💡 提示：视频文件较大，建议通过 SSH (scp) 或 U盘直接拷贝。\n单个视频可点击 📥 下载按钮。', 4000);
+  toast(' 提示：视频文件较大，建议通过 SSH (scp) 或 U盘直接拷贝。\n单个视频可点击  下载按钮。', 4000);
 }
 
 // ==================== 车牌日志 ====================
@@ -577,7 +577,7 @@ async function loadPlates(page){
     const data = await res.json();
 
     if(!data.plates || data.plates.length === 0){
-      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--dim);padding:24px">📭 暂无车牌识别记录</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--dim);padding:24px"> 暂无车牌识别记录</td></tr>';
       renderPlatePagination(data);
       return;
     }
@@ -616,13 +616,13 @@ async function loadNetwork(){
     const res = await fetch(API_BASE + '/api/network');
     const data = await res.json();
     const netDiv = document.getElementById('network-info');
-    const modeLabels = {hotspot:'🔥 热点模式', wifi:'📶 WiFi 客户端', disconnected:'❌ 未连接'};
+    const modeLabels = {hotspot:' 热点模式', wifi:' WiFi 客户端', disconnected:' 未连接'};
     netDiv.innerHTML = `
-      <div>📡 <b>连接模式</b>：${modeLabels[data.mode] || data.mode}</div>
-      ${data.ssid ? '<div>📶 <b>WiFi SSID</b>：' + escapeHtml(data.ssid) + '</div>' : ''}
-      <div>🌍 <b>IP 地址</b>：<code style="background:rgba(0,115,230,0.15);padding:2px 8px;border-radius:4px;font-size:15px">${data.ip}</code></div>
+      <div> <b>连接模式</b>：${modeLabels[data.mode] || data.mode}</div>
+      ${data.ssid ? '<div> <b>WiFi SSID</b>：' + escapeHtml(data.ssid) + '</div>' : ''}
+      <div> <b>IP 地址</b>：<code style="background:rgba(0,115,230,0.15);padding:2px 8px;border-radius:4px;font-size:15px">${data.ip}</code></div>
       <div style="margin-top:8px;padding:8px;background:rgba(0,115,230,0.08);border-radius:8px">
-        📱 <b>管理地址</b>：<a href="http://${data.ip}" style="color:var(--title)" target="_blank">http://${data.ip}</a>
+         <b>管理地址</b>：<a href="http://${data.ip}" style="color:var(--title)" target="_blank">http://${data.ip}</a>
       </div>
     `;
   } catch(e) {}
@@ -634,7 +634,7 @@ async function restartHotspot(){
     const data = await res.json();
     toast(data.message || '热点重启中...');
     setTimeout(loadNetwork, 3000);
-  } catch(e) { toast('❌ 操作失败'); }
+  } catch(e) { toast(' 操作失败'); }
 }
 
 async function disconnectWifi(){
@@ -644,7 +644,7 @@ async function disconnectWifi(){
     const data = await res.json();
     toast(data.message || '正在切换...');
     setTimeout(loadNetwork, 5000);
-  } catch(e) { toast('❌ 操作失败'); }
+  } catch(e) { toast(' 操作失败'); }
 }
 
 // ==================== 工具函数 ====================
@@ -684,7 +684,7 @@ async function loadKnownPlates(){
           <span style="font-weight:700;font-size:16px;color:var(--title)">${escapeHtml(plate)}</span>
           ${nickname ? '<span style="color:var(--text);margin-left:8px;font-size:14px">' + escapeHtml(nickname) + '</span>' : '<span style="color:var(--dim);margin-left:8px;font-size:12px">(无昵称)</span>'}
         </div>
-        <button class="btn btn-danger btn-sm" onclick="deleteKnownPlate('${escapeHtml(plate)}')">🗑 删除</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteKnownPlate('${escapeHtml(plate)}')"> 删除</button>
       </div>
     `).join('');
   } catch(e) {
@@ -696,7 +696,7 @@ async function addKnownPlate(){
   const plate = document.getElementById('kp-plate').value.trim().toUpperCase();
   const nickname = document.getElementById('kp-nickname').value.trim();
   if (!plate) {
-    toast('⚠️ 请输入车牌号');
+    toast(' 请输入车牌号');
     return;
   }
   try {
@@ -711,7 +711,7 @@ async function addKnownPlate(){
     document.getElementById('kp-nickname').value = '';
     loadKnownPlates();
   } catch(e) {
-    toast('❌ 保存失败');
+    toast(' 保存失败');
   }
 }
 
@@ -726,7 +726,7 @@ async function deleteKnownPlate(plate){
     const data = await res.json();
     toast(data.message || '已删除');
     loadKnownPlates();
-  } catch(e) { toast('❌ 删除失败'); }
+  } catch(e) { toast(' 删除失败'); }
 }
 
 refreshAll();

@@ -17,7 +17,9 @@ if __name__ == "__main__":
     web_url = web_server.start()
     # 延迟显示管理地址（等 OSD 系统就绪）
     QTimer.singleShot(2000, lambda: window.show_osd_message(
-        f"🌐 管理网页已启动\n{web_url}"
+        f"🌐 管理网页已启动\n{web_url}" if web_url else "❌ 管理网页启动失败，请检查端口权限或占用"
     ))
+    app.aboutToQuit.connect(web_server.stop)
+    app.aboutToQuit.connect(window.worker.stop)
 
     sys.exit(app.exec_())

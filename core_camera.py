@@ -4,6 +4,7 @@ import time
 import json
 import psutil
 import threading
+import tempfile
 import subprocess as sp
 import cv2
 from datetime import datetime
@@ -162,7 +163,7 @@ class SystemUtils:
 
         try:
             cmd = ["lsblk", "-o", "NAME,LABEL,MOUNTPOINT,TRAN,RM,PKNAME,TYPE", "-J"]
-            res = sp.run(cmd, capture_output=True, text=True)
+            res = sp.run(cmd, capture_output=True, text=True, timeout=5)
             block_devs = json.loads(res.stdout).get("blockdevices", [])
             
             # 1. 扫描根目录 / 对应的硬件父级盘名称
@@ -178,7 +179,7 @@ class SystemUtils:
             find_root_disk(block_devs)
 
             # 2. 深度遍历设备树
-            def parse_devices(dev_list):
+            def parse_devices(dev_list, parent_usb=False):
                 for dev in dev_list:
                     dev_name = dev.get("name", "")
                     pk_name = dev.get("pkname", "")
@@ -189,10 +190,10 @@ class SystemUtils:
                     if dev_name.startswith("mmcblk") or dev_name.startswith("nvme") or dev_name.startswith("loop"):
                         continue
 
-                    is_usb = (dev.get("tran") == "usb") or dev.get("rm") in [True, 1, "1", "true"]
+                    is_usb = parent_usb or (dev.get("tran") == "usb") or dev.get("rm") in [True, 1, "1", "true"]
                     
                     if dev_type == "disk" and "children" in dev and len(dev["children"]) > 0:
-                        parse_devices(dev["children"])
+                        parse_devices(dev["children"], is_usb)
                         continue
                         
                     if not is_usb:
@@ -207,10 +208,10 @@ class SystemUtils:
                     # 挂载 USB 设备（需 root 运行 DashCam 才能写入 exFAT）
                     target_mount = f"/mnt/usb_{dev_name}"
                     if not mountpoint:
-                        sp.run(["sudo", "mkdir", "-p", target_mount], capture_output=True)
+                        sp.run(["sudo", "-n", "mkdir", "-p", target_mount], capture_output=True, timeout=5)
                         m_res = sp.run(
-                            ["sudo", "mount", f"/dev/{dev_name}", target_mount],
-                            capture_output=True, text=True
+                            ["sudo", "-n", "mount", f"/dev/{dev_name}", target_mount],
+                            capture_output=True, text=True, timeout=10
                         )
                         if m_res.returncode == 0:
                             mountpoint = target_mount
@@ -224,9 +225,10 @@ class SystemUtils:
                         try:
                             usage = psutil.disk_usage(mountpoint)
                             devices.append({
-                                "name": f"🔌 {label}",
+                                "name": label,
                                 "path": mountpoint,
                                 "free_gb": round(usage.free / (1024**3), 1),
+                                "total_gb": round(usage.total / (1024**3), 1),
                                 "percent": usage.percent,
                                 "is_usb": True
                             })
@@ -267,10 +269,13 @@ class CameraWorker(QObject):
     storage_notify = pyqtSignal(str)  # 存储切换结果通知 UI（成功/失败）
     storage_path_changed = pyqtSignal(str)  # 存储路径变更（通知 UI 刷新 radio）
     recording_toggled = pyqtSignal(bool)  # 录制状态变更（同步 UI 按钮）
+    storage_devices_updated = pyqtSignal(list)
 
     def __init__(self):
         super().__init__()
         self.cap = None
+        self._snapshot_lock = threading.Lock()
+        self._snapshot_frame = None
         self.running = False
         self.is_recording = False
         self.is_playback = False
@@ -278,13 +283,17 @@ class CameraWorker(QObject):
         self.seek_frame = None
         self.playback_file = None
         self.new_playback_file = None  
+        self.playback_fps = 30.0
         self.storage_path = ""  # 初始为空，等 U 盘检测
+        self.storage_devices = []
+        self._last_storage_check = 0.0
         self.fps_target = 30
         self.width = 1920
         self.height = 1080
         self._encoder_proc = None  # ffmpeg Popen（硬件/软件编码）或 None
         self._hw_encoder = None    # 检测到的 H.264 硬件编码器名，或 None
         self.record_start_time = 0
+        self._record_start_monotonic = 0.0
         self.current_video_filename = ""
         
         self.lpr_catcher = None
@@ -300,7 +309,6 @@ class CameraWorker(QObject):
         self._plates_lock = threading.Lock()   # 保护 plates_log.json 并发写入
         self._segment_frame_count = 0  # 当前录制段帧数计数
         self._total_recorded_frames = 0  # 累计录制帧数
-        self._recording_start_time = 0.0  # 录制开始墙钟时间
         self._pending_storage_path = None  # 待切换的目标路径
         self._frame_count = 0  # 用于周期性 USB 检测
         self._no_usb_shown = False  # 全屏 OSD 防重复
@@ -372,6 +380,8 @@ class CameraWorker(QObject):
         """检测 U 盘，有则自动切换，无则清空路径并通知 UI"""
         try:
             devices = SystemUtils.get_storage_devices()
+            self.storage_devices = devices
+            self.storage_devices_updated.emit(devices)
             for dev in devices:
                 if dev.get("is_usb"):
                     usb_path = dev["path"]
@@ -394,9 +404,11 @@ class CameraWorker(QObject):
                         self.recording_toggled.emit(True)
                     return
             # 没找到可用的 USB
-            if self.storage_path:
+            if self.storage_path or self._pending_storage_path:
                 # 之前有盘，现在没了
                 self.storage_path = ""
+                self._pending_storage_path = None
+                self.stop_recording_file()
                 self._save_storage_config("")
                 self.is_recording = False
                 self.recording_toggled.emit(False)
@@ -421,7 +433,7 @@ class CameraWorker(QObject):
             if not self.storage_path:
                 return
             log_file = os.path.join(self.storage_path, "plates_log.json")
-            offset_sec = round(now - self.record_start_time, 1) if (self.is_recording and self.record_start_time > 0) else 0
+            offset_sec = round(self.recording_elapsed(), 1) if self.is_recording else 0
             entry = {
                 "time_str": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "timestamp": now,
@@ -473,17 +485,29 @@ class CameraWorker(QObject):
         finally:
             self.lpr_busy = False
 
-    def _check_and_clean_disk(self):
+    def _storage_ready(self, path):
+        return bool(path and os.path.ismount(path) and os.access(path, os.W_OK))
+
+    def _check_and_clean_disk(self, path=None):
+        """只回收本应用的旧录像，持续释放到安全空间。"""
+        path = path or self.storage_path
         try:
-            usage = psutil.disk_usage(self.storage_path)
-            free_gb = usage.free / (1024**3)
-            if usage.percent > 88.0 or free_gb < 1.5:
-                files = [os.path.join(self.storage_path, f) for f in os.listdir(self.storage_path) if f.endswith((".mkv", ".mp4"))]
-                if files:
-                    files.sort(key=lambda x: os.path.getmtime(x))
-                    os.remove(files[0])
-        except Exception:
-            pass
+            files = sorted(
+                (os.path.join(path, name) for name in os.listdir(path)
+                 if name.startswith("REC_") and name.endswith((".mkv", ".mp4"))
+                 and not os.path.islink(os.path.join(path, name))
+                 and name != self.current_video_filename), key=os.path.getmtime)
+            while True:
+                usage = psutil.disk_usage(path)
+                reserve = min(1.5 * 1024**3, usage.total * .1)
+                if usage.percent <= 88 and usage.free >= reserve:
+                    return True
+                if not files:
+                    return False
+                os.remove(files.pop(0))
+        except OSError as exc:
+            print(f"存储检查失败: {exc}")
+            return False
 
     def start_camera(self):
         if self.cap is None or not self.cap.isOpened():
@@ -492,9 +516,11 @@ class CameraWorker(QObject):
             self.cap.set(cv2.CAP_PROP_FOURCC, 1196444237)  # MJPG
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+            self.cap.set(cv2.CAP_PROP_FPS, self.fps_target)
         self.running = True
         self.gps.start()
-        threading.Thread(target=self._loop, daemon=True).start()
+        self._camera_thread = threading.Thread(target=self._loop, daemon=True)
+        self._camera_thread.start()
 
     def get_camera_caps(self):
         """查询摄像头支持的分辨率上限和帧率，返回 (res_list, fps_list)
@@ -599,6 +625,7 @@ class CameraWorker(QObject):
                 time.sleep(1.0)
 
     def _loop_tick(self):
+        tick_start = time.monotonic()
         # 线程安全重启摄像头（由 apply_video_params 触发）
         if self._restart_camera:
             self._restart_camera = False
@@ -618,6 +645,7 @@ class CameraWorker(QObject):
             self.cap.set(cv2.CAP_PROP_FOURCC, 1196444237)  # MJPG
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+            self.cap.set(cv2.CAP_PROP_FPS, self.fps_target)
             # 3. 恢复录制
             if was_recording:
                 self.is_recording = True
@@ -625,6 +653,10 @@ class CameraWorker(QObject):
             return
 
         if self.is_playback and self.playback_file:
+            if self.is_recording:
+                self.is_recording = False
+                self.recording_toggled.emit(False)
+            self.stop_recording_file()
             self._run_playback()
             return
 
@@ -677,7 +709,7 @@ class CameraWorker(QObject):
         cv2.putText(frame, now_str, (x_pos, y_pos), font, font_scale, (255, 255, 255), thickness_fg, cv2.LINE_AA)
 
         if self.is_recording:
-            elapsed = int(time.time() - self.record_start_time)
+            elapsed = int(self.recording_elapsed())
             cv2.circle(frame, (40, 40), 12, (0, 0, 255), -1)
             cv2.putText(frame, f"REC {elapsed}s", (60, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
             try:
@@ -688,7 +720,6 @@ class CameraWorker(QObject):
             if self._encoder_proc is not None:
                 self.stop_recording_file()
 
-        cv2.putText(frame, "AI Status: ON (>0.95)", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
         # LPR 识别跳帧执行（节省 CPU 用于预览）
         if self._frame_count % 3 == 0:
@@ -711,6 +742,8 @@ class CameraWorker(QObject):
 
         # 预览帧缩小至 1/4 像素（640×360 @ 1080p），大幅减少 QImage 开销
         preview_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5, interpolation=cv2.INTER_LINEAR)
+        with self._snapshot_lock:
+            self._snapshot_frame = preview_frame
         rgb_frame = cv2.cvtColor(preview_frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_frame.shape
         q_img = QImage(rgb_frame.data, w, h, ch * w, QImage.Format_RGB888).copy()
@@ -718,12 +751,28 @@ class CameraWorker(QObject):
         self.frame_ready.emit(q_img, osd_text)
 
         # 每 3 秒检测一次 U 盘热插拔
-        if self._frame_count % (self.fps_target * 3) == 0:
+        if time.monotonic() - self._last_storage_check >= 3:
+            self._last_storage_check = time.monotonic()
             self._auto_select_usb()
 
-        time.sleep(1.0 / self.fps_target)
+        # cap.read/OSD/编码本身已耗时，只休眠本帧剩余预算。
+        time.sleep(max(0.0, 1.0 / self.fps_target - (time.monotonic() - tick_start)))
                 
     def _handle_recording(self, frame):
+        with self._writer_lock:
+            if self.is_recording:
+                self._handle_recording_locked(frame)
+
+    def get_snapshot_jpeg(self):
+        """只读取主循环发布的画面，不跨线程访问 VideoCapture。"""
+        with self._snapshot_lock:
+            frame = self._snapshot_frame
+        if frame is None or not self.running:
+            return None
+        ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+        return jpeg.tobytes() if ok else None
+
+    def _handle_recording_locked(self, frame):
         # 未检测到 U 盘（且无待切换路径）：停止录制
         if not self.storage_path and not self._pending_storage_path:
             self.is_recording = False
@@ -731,15 +780,30 @@ class CameraWorker(QObject):
             return
         
         now = time.time()
-        if self._encoder_proc is None or (now - self.record_start_time) > 180:
+        # 更改系统时间时也换段，避免 wallclock 输入时间戳向前/向后跳变。
+        clock_changed = (self._encoder_proc is not None and
+                         abs((now - self.record_start_time) - self.recording_elapsed()) > 2.0)
+        if self._encoder_proc is None or self.recording_elapsed() >= 180 or clock_changed:
             self.stop_recording_file()
-            self._check_and_clean_disk()
             
             # 处理待切换的存储路径：先尝试在新盘创建，失败则回退到旧盘
             target_path = self.storage_path
             if self._pending_storage_path is not None:
                 target_path = self._pending_storage_path
             
+            if not self._storage_ready(target_path):
+                self._pending_storage_path = None
+                self.storage_path = ""
+                self.is_recording = False
+                self.recording_toggled.emit(False)
+                self.storage_notify.emit("存储设备不可用，请检查 U 盘连接")
+                return
+            if self._check_and_clean_disk(target_path) is False:
+                self.is_recording = False
+                self.recording_toggled.emit(False)
+                self.storage_notify.emit("存储空间不足，请清理 U 盘后重新录像")
+                return
+
             try:
                 os.makedirs(target_path, exist_ok=True)
             except Exception as e:
@@ -752,10 +816,12 @@ class CameraWorker(QObject):
             
             self.current_video_filename = datetime.now().strftime("REC_%Y%m%d_%H%M%S.mkv")
             filepath = os.path.join(target_path, self.current_video_filename)
-            measured_fps = max(8.0, self._get_measured_fps())
+            if os.path.exists(filepath):
+                self.current_video_filename = datetime.now().strftime("REC_%Y%m%d_%H%M%S_%f.mkv")
+                filepath = os.path.join(target_path, self.current_video_filename)
             
             # 启动 ffmpeg 编码器（硬件优先，不可用时用 libx264）
-            self._encoder_proc = self._start_ffmpeg_encoder(filepath, measured_fps)
+            self._encoder_proc = self._start_ffmpeg_encoder(filepath, self.fps_target)
             if self._encoder_proc is None:
                 print(f"❌ 致命错误：无法启动编码器写入 {filepath}！")
                 if self._pending_storage_path is not None:
@@ -774,7 +840,9 @@ class CameraWorker(QObject):
                 print(f"✅ 存储路径已切换至: {self.storage_path}")
                 self._init_storage_configs(self.storage_path)
                 
-            self.record_start_time = now
+            self.record_start_time = time.time()
+            self._record_start_monotonic = time.monotonic()
+            self._segment_frame_count = 0
             print(f"🎬 开始录制新分段: {filepath} [{self._hw_encoder or 'libx264'}]")
 
         if self._encoder_proc:
@@ -793,13 +861,11 @@ class CameraWorker(QObject):
                 self._no_usb_shown = False
                 self.storage_notify.emit("⚠️ U盘写入失败，已停止录制")
 
-    def _get_measured_fps(self):
-        """返回持续测量的实际录制帧率（基于墙钟时间）"""
-        if self._total_recorded_frames > 60 and self._recording_start_time > 0:
-            elapsed = time.time() - self._recording_start_time
-            if elapsed > 2:
-                return self._total_recorded_frames / elapsed
-        return self.fps_target
+    def recording_elapsed(self):
+        """当前片段经过时间，不受 GPS/RTC/手动校时影响。"""
+        if not self._record_start_monotonic:
+            return 0.0
+        return max(0.0, time.monotonic() - self._record_start_monotonic)
 
     def stop_recording_file(self):
         """安全关闭当前录制分段"""
@@ -808,6 +874,8 @@ class CameraWorker(QObject):
                 self._close_encoder()
                 self.current_video_filename = ""
                 print("🛑 录制底层资源已安全释放。")
+            self._record_start_monotonic = 0.0
+            self.record_start_time = 0
 
     def _start_ffmpeg_encoder(self, filepath, fps):
         """启动 ffmpeg 子进程进行 H.264 编码，返回 Popen 或 None。
@@ -816,15 +884,19 @@ class CameraWorker(QObject):
         """
         encoder = self._hw_encoder or "libx264"
         cmd = [
-            "ffmpeg", "-hide_banner",
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostats",
             "-f", "rawvideo", "-pix_fmt", "bgr24",
             "-s", f"{self.width}x{self.height}",
-            "-r", str(fps),
-            "-thread_queue_size", "64",
+            "-framerate", str(fps),
+            # rawvideo 没有时间戳。按实际读入时间打戳，再由编码器补帧，
+            # 避免低吞吐时把数秒画面挤成一秒；小探测窗口避免启动缓存。
+            "-use_wallclock_as_timestamps", "1",
+            "-probesize", "32", "-analyzeduration", "0", "-fpsprobesize", "0",
             "-i", "-",
             "-c:v", encoder,
             "-b:v", "4M",
             "-g", "30",
+            "-r", str(fps), "-vsync", "cfr",
         ]
         if encoder == "h264_v4l2m2m":
             cmd += ["-num_capture_buffers", "16"]
@@ -832,10 +904,14 @@ class CameraWorker(QObject):
             cmd += ["-preset", "ultrafast", "-tune", "zerolatency"]
         cmd += ["-pix_fmt", "yuv420p", "-f", "matroska", "-y", filepath]
         
+        # 不使用无人读取的 stderr PIPE，避免长时间录制被日志堵住。
+        error_log = tempfile.TemporaryFile()
         try:
-            proc = sp.Popen(cmd, stdin=sp.PIPE, stderr=sp.PIPE)
+            proc = sp.Popen(cmd, stdin=sp.PIPE, stderr=error_log)
+            proc._dashcam_error_log = error_log
             return proc
         except Exception as e:
+            error_log.close()
             print(f"❌ 启动 ffmpeg 编码器失败: {e}")
             return None
 
@@ -845,8 +921,6 @@ class CameraWorker(QObject):
             self._encoder_proc.stdin.write(frame.tobytes())
             self._segment_frame_count += 1
             self._total_recorded_frames += 1
-            if self._recording_start_time == 0:
-                self._recording_start_time = time.time()
         except BrokenPipeError:
             raise Exception("ffmpeg pipe 断开")
 
@@ -866,6 +940,14 @@ class CameraWorker(QObject):
         except sp.TimeoutExpired:
             proc.kill()
             proc.wait()
+        error_log = getattr(proc, "_dashcam_error_log", None)
+        if error_log:
+            if proc.returncode:
+                error_log.seek(max(0, error_log.seek(0, os.SEEK_END) - 500))
+                error = error_log.read().decode("utf-8", errors="replace").strip()
+                if error:
+                    print(f"❌ 编码器退出: {error}")
+            error_log.close()
 
     def _load_storage_config(self):
         """读取上次保存的存储路径"""
@@ -965,6 +1047,7 @@ class CameraWorker(QObject):
         p_cap = cv2.VideoCapture(self.playback_file)
         total_frames = int(p_cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = p_cap.get(cv2.CAP_PROP_FPS) or 30.0
+        self.playback_fps = fps
         
         def load_logs(filepath):
             video_name = os.path.basename(filepath)
@@ -980,13 +1063,15 @@ class CameraWorker(QObject):
         matched_logs = load_logs(self.playback_file)
 
         while self.running and self.is_playback:
-            if self.new_playback_file and self.new_playback_file != self.playback_file:
+            frame_start = time.monotonic()
+            if self.new_playback_file:
                 p_cap.release()
                 self.playback_file = self.new_playback_file
                 self.new_playback_file = None
                 p_cap = cv2.VideoCapture(self.playback_file)
                 total_frames = int(p_cap.get(cv2.CAP_PROP_FRAME_COUNT))
                 fps = p_cap.get(cv2.CAP_PROP_FPS) or 30.0
+                self.playback_fps = fps
                 matched_logs = load_logs(self.playback_file)
                 self.seek_frame = 0 
                 continue
@@ -994,11 +1079,12 @@ class CameraWorker(QObject):
             if not p_cap.isOpened():
                 break
 
-            if self.seek_frame is not None:
+            seeking = self.seek_frame is not None
+            if seeking:
                 p_cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, min(self.seek_frame, total_frames - 1)))
                 self.seek_frame = None
                 
-            if self.is_paused:
+            if self.is_paused and not seeking:
                 time.sleep(0.05)
                 continue
                 
@@ -1023,7 +1109,7 @@ class CameraWorker(QObject):
             
             self.frame_ready.emit(q_img, current_plate_osd)
             self.playback_progress.emit(current_frame, total_frames, current_plate_osd)
-            time.sleep(1 / fps)
+            time.sleep(max(0.0, 1 / fps - (time.monotonic() - frame_start)))
             
         p_cap.release()
         self.is_playback = False
@@ -1035,4 +1121,9 @@ class CameraWorker(QObject):
         self.is_recording = False
         self.stop_recording_file()
         self.gps.stop()
-        if self.cap: self.cap.release()
+        camera_thread = getattr(self, "_camera_thread", None)
+        if camera_thread and camera_thread is not threading.current_thread():
+            camera_thread.join(timeout=3)
+        # VideoCapture.read 尚未返回时不能从 UI 线程 release，否则可能原生崩溃。
+        if self.cap and (camera_thread is None or not camera_thread.is_alive()):
+            self.cap.release()

@@ -13,93 +13,42 @@ import socket
 import psutil
 import threading
 import subprocess
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs, unquote_plus
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs, unquote
 
 # cv2 仅在生成实时快照时使用
 import cv2
+from network_manager import get_network_status as _wifi_status, start_hotspot
 
 # ---------------------------------------------------------------------------
 # 辅助工具
 # ---------------------------------------------------------------------------
 
-def get_local_ip():
-    """获取本机局域网 IP 地址（优先 wlan0）"""
-    try:
-        # 方案 1：通过 nmcli 查活动连接
-        res = subprocess.run(
-            ["nmcli", "-t", "-f", "IP4.ADDRESS", "device", "show", "wlan0"],
-            capture_output=True, text=True, timeout=5
-        )
-        for line in res.stdout.strip().split("\n"):
-            line = line.strip()
-            if line.startswith("IP4.ADDRESS[1]:"):
-                ip = line.split(":", 1)[1].strip()
-                if ip and not ip.startswith("127."):
-                    # 去掉 CIDR 后缀 (如 /24)
-                    return ip.split("/")[0]
-    except Exception:
-        pass
-
-    # 方案 2：socket 方式回退
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(0.1)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        if ip and not ip.startswith("127."):
-            return ip
-    except Exception:
-        pass
-
+def _fallback_local_ip():
+    """从本机接口取地址，离线热点不依赖公网路由探测。"""
+    interfaces = psutil.net_if_stats()
+    for name, addresses in psutil.net_if_addrs().items():
+        if name not in interfaces or not interfaces[name].isup:
+            continue
+        for address in addresses:
+            if address.family == socket.AF_INET and not address.address.startswith("127."):
+                return address.address
     return "未知"
 
 
-def is_hotspot_active():
-    """检查 Pi-Dashcam 热点是否开启"""
-    try:
-        res = subprocess.run(
-            ["nmcli", "-t", "-f", "NAME,DEVICE,TYPE", "connection", "show", "--active"],
-            capture_output=True, text=True, timeout=5
-        )
-        for line in res.stdout.strip().split("\n"):
-            if "Pi-Dashcam" in line and "802-11-wireless" in line:
-                return True
-    except Exception:
-        pass
-    return False
-
-
 def get_network_status():
-    """获取当前网络连接状态"""
-    status = {
-        "mode": "unknown",       # hotspot / wifi / disconnected
-        "ssid": "",
-        "ip": get_local_ip(),
-        "hotspot_active": is_hotspot_active(),
-    }
-    try:
-        res = subprocess.run(
-            ["nmcli", "-t", "-f", "NAME,DEVICE,TYPE", "connection", "show", "--active"],
-            capture_output=True, text=True, timeout=5
-        )
-        for line in res.stdout.strip().split("\n"):
-            parts = line.split(":")
-            if len(parts) >= 3:
-                name, dev, conn_type = parts[0], parts[1], parts[2]
-                if "802-11-wireless" in conn_type or "wifi" in conn_type.lower():
-                    if name == "Pi-Dashcam":
-                        status["mode"] = "hotspot"
-                    else:
-                        status["mode"] = "wifi"
-                        status["ssid"] = name
-                    break
-        if status["mode"] == "unknown":
-            status["mode"] = "disconnected"
-    except Exception:
-        pass
+    status = _wifi_status()
+    if status["ip"] == "未知":
+        status["ip"] = _fallback_local_ip()
     return status
+
+
+def get_local_ip():
+    return get_network_status()["ip"]
+
+
+def is_hotspot_active():
+    return get_network_status()["hotspot_active"]
 
 
 def get_system_uptime():
@@ -152,6 +101,8 @@ def get_osd_message(msg_list, max_entries=20):
 class DashcamAPIHandler(BaseHTTPRequestHandler):
     """REST API + 静态文件请求处理器"""
 
+    timeout = 15
+
     # 类变量，由 DashcamWebServer 在启动前注入
     camera_worker = None       # CameraWorker 实例引用
     osd_messages = []          # OSD 消息历史
@@ -188,26 +139,32 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
         file_size = os.path.getsize(filepath)
         range_header = self.headers.get("Range")
 
+        start, length = 0, file_size
         if range_header:
-            # 处理 Range 请求（视频 seek）
-            m = re.match(r"bytes=(\d+)-(\d*)", range_header)
-            if m:
-                start = int(m.group(1))
-                end = int(m.group(2)) if m.group(2) else file_size - 1
-                end = min(end, file_size - 1)
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
+            if match and any(match.groups()):
+                first, last = match.groups()
+                if first:
+                    start = int(first)
+                    end = min(int(last), file_size - 1) if last else file_size - 1
+                else:
+                    start = max(0, file_size - int(last))
+                    end = file_size - 1
+                if start >= file_size or start > end:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{file_size}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 length = end - start + 1
-
                 self.send_response(206)
                 self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
-                self.send_header("Content-Length", length)
             else:
-                start, length = 0, file_size
+                # 不支持多段 Range，按 HTTP 语义忽略并发送完整文件。
                 self.send_response(200)
-                self.send_header("Content-Length", file_size)
         else:
-            start, length = 0, file_size
             self.send_response(200)
-            self.send_header("Content-Length", file_size)
+        self.send_header("Content-Length", str(length))
 
         self.send_header("Content-Type", content_type)
         self.send_header("Accept-Ranges", "bytes")
@@ -294,7 +251,7 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
         full_path = os.path.join(self.STATIC_DIR, safe_path)
 
         # 确保在 static 目录内
-        if not full_path.startswith(self.STATIC_DIR):
+        if os.path.commonpath([os.path.realpath(full_path), os.path.realpath(self.STATIC_DIR)]) != os.path.realpath(self.STATIC_DIR):
             self._send_error_json("禁止访问", 403)
             return
 
@@ -332,7 +289,7 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        path = unquote_plus(parsed.path.rstrip("/") or "/")
+        path = unquote(parsed.path.rstrip("/") or "/")
         params = parse_qs(parsed.query)
 
         try:
@@ -379,15 +336,20 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        path = unquote_plus(parsed.path.rstrip("/") or "/")
+        path = unquote(parsed.path.rstrip("/") or "/")
 
-        # 读取请求体
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length) if content_length > 0 else b""
         try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+            if not 0 <= content_length <= 65536:
+                self._send_error_json("请求体过大或长度非法", 400)
+                return
+            body = self.rfile.read(content_length) if content_length else b""
             data = json.loads(body) if body else {}
-        except json.JSONDecodeError:
-            data = {}
+            if not isinstance(data, dict):
+                raise ValueError("请求体必须为 JSON 对象")
+        except (ValueError, UnicodeDecodeError):
+            self._send_error_json("无效的 JSON 请求或长度", 400)
+            return
 
         try:
             if path == "/api/record/start":
@@ -423,6 +385,7 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
     def _handle_status(self):
         worker = self.camera_worker
         status = {
+            "deployment_revision": os.environ.get("DASHCAM_REVISION", ""),
             "server_uptime": get_system_uptime(),
             "server_start": time.strftime("%Y-%m-%d %H:%M:%S",
                 time.localtime(self.server_start_time)),
@@ -431,7 +394,7 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
             "recording": {
                 "active": worker.is_recording if worker else False,
                 "current_file": getattr(worker, "current_video_filename", "") if worker else "",
-                "elapsed_sec": int(time.time() - worker.record_start_time)
+                "elapsed_sec": int(worker.recording_elapsed())
                     if (worker and worker.is_recording and worker.record_start_time > 0) else 0,
             },
             "network": get_network_status(),
@@ -500,22 +463,33 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
             "count": len(videos),
         })
 
+    def _video_path(self, filename):
+        worker = self.camera_worker
+        if (not isinstance(filename, str) or not filename or
+                filename != os.path.basename(filename) or
+                not filename.lower().endswith((".mkv", ".mp4"))):
+            self._send_error_json("非法视频文件名", 403)
+            return None
+        root = os.path.realpath(worker.storage_path)
+        filepath = os.path.join(root, filename)
+        if os.path.commonpath([root, os.path.realpath(filepath)]) != root:
+            self._send_error_json("禁止访问存储目录之外的文件", 403)
+            return None
+        if not os.path.isfile(filepath):
+            self._send_error_json("文件不存在", 404)
+            return None
+        return filepath
+
     def _handle_video_file(self, filename, params):
         worker = self.camera_worker
         if not worker or not worker.storage_path:
             self._send_error_json("未检测到存储设备", 404)
             return
 
-        # 安全检查
-        safe_name = os.path.basename(filename)
-        if ".." in safe_name or safe_name.startswith("/"):
-            self._send_error_json("非法文件名", 403)
+        filepath = self._video_path(filename)
+        if filepath is None:
             return
-
-        filepath = os.path.join(worker.storage_path, safe_name)
-        if not os.path.isfile(filepath):
-            self._send_error_json("文件不存在", 404)
-            return
+        safe_name = os.path.basename(filepath)
 
         # 支持 ?download=1 强制下载
         download = params.get("download", ["0"])[0]
@@ -602,12 +576,16 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
             if self.camera_worker:
                 self.camera_worker.known_plates = data.copy()
         except Exception as e:
-            print(f"⚠️ 保存已知车牌失败: {e}")
+            raise RuntimeError(f"保存已知车牌失败: {e}") from e
 
     def _handle_known_plates_get(self):
         self._send_json(self._load_known_plates())
 
     def _handle_known_plates_post(self, data):
+        with self.known_plates_lock:
+            self._update_known_plate(data)
+
+    def _update_known_plate(self, data):
         action = data.get("action", "add")
         plate = data.get("plate", "").strip().upper()
         if not plate:
@@ -631,39 +609,25 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
             self._send_json({"success": True, "message": f"已保存 {label}"})
 
     def _handle_snapshot(self):
-        """生成当前摄像头的 JPEG 快照"""
         worker = self.camera_worker
-        if not worker or not worker.cap or not worker.cap.isOpened():
-            self._send_error_json("摄像头未就绪", 503)
+        data = worker.get_snapshot_jpeg() if worker else None
+        if data is None:
+            self._send_error_json("摄像头画面未就绪", 503)
             return
-
-        try:
-            # 从摄像头读取一帧（不影响主循环，cap 是共享的）
-            ret, frame = worker.cap.read()
-            if not ret or frame is None:
-                self._send_error_json("无法读取摄像头画面", 500)
-                return
-
-            # 编码为 JPEG
-            _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
-            data = jpeg.tobytes()
-
-            self.send_response(200)
-            self.send_header("Content-Type", "image/jpeg")
-            self.send_header("Content-Length", len(data))
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(data)
-        except Exception as e:
-            self._send_error_json(f"快照生成失败: {e}", 500)
+        self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(data)
 
     def _handle_network(self):
         self._send_json(get_network_status())
 
     def _handle_storage(self):
         worker = self.camera_worker
-        devices = SystemUtils.get_storage_devices() if hasattr(SystemUtils, "get_storage_devices") else []
+        devices = list(getattr(worker, "storage_devices", [])) if worker else []
 
         storage_info = {
             "current_path": worker.storage_path if worker else "",
@@ -689,7 +653,7 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
             "is_recording": worker.is_recording if worker else False,
             "current_file": getattr(worker, "current_video_filename", "") if worker else "",
             "storage_path": worker.storage_path if worker else "",
-            "elapsed_sec": int(time.time() - worker.record_start_time)
+            "elapsed_sec": int(worker.recording_elapsed())
                 if (worker and worker.is_recording and worker.record_start_time > 0) else 0,
         })
 
@@ -707,6 +671,9 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
             return
         if not worker.storage_path:
             self._send_error_json("未检测到存储设备，无法录像", 400)
+            return
+        if worker.is_playback:
+            self._send_error_json("请先退出本机回放再开始录像", 409)
             return
 
         if worker.is_recording:
@@ -742,16 +709,18 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
             self._send_error_json("参数错误", 400)
             return
 
-        safe_name = os.path.basename(filename)
-        if ".." in safe_name:
-            self._send_error_json("非法文件名", 403)
+        filepath = self._video_path(filename)
+        if filepath is None:
             return
+        safe_name = os.path.basename(filepath)
+        with worker._writer_lock:
+            active_file = worker.current_video_filename
+            if active_file and os.path.realpath(os.path.join(worker.storage_path, active_file)) == os.path.realpath(filepath):
+                self._send_error_json("当前视频正在录制，请先停止录像", 409)
+                return
+            self._delete_video_file(filepath, safe_name)
 
-        filepath = os.path.join(worker.storage_path, safe_name)
-        if not os.path.isfile(filepath):
-            self._send_error_json("文件不存在", 404)
-            return
-
+    def _delete_video_file(self, filepath, safe_name):
         try:
             os.remove(filepath)
             self.osd_messages.append((time.time(), f"🌐 远程删除视频: {safe_name}"))
@@ -763,11 +732,7 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
         """重启热点（需要 sudo）"""
         def _bg_restart():
             try:
-                subprocess.run(["sudo", "nmcli", "connection", "down", "Pi-Dashcam"],
-                    capture_output=True, timeout=10)
-                time.sleep(1)
-                subprocess.run(["sudo", "nmcli", "connection", "up", "Pi-Dashcam"],
-                    capture_output=True, timeout=10)
+                start_hotspot()
                 self.osd_messages.append((time.time(), "🌐 热点已重启"))
             except Exception as e:
                 self.osd_messages.append((time.time(), f"❌ 热点重启失败: {e}"))
@@ -779,13 +744,7 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
         """断开当前 WiFi 连接（回到热点模式）"""
         def _bg_disconnect():
             try:
-                # 断开 wlan0
-                subprocess.run(["sudo", "nmcli", "device", "disconnect", "wlan0"],
-                    capture_output=True, timeout=10)
-                time.sleep(3)
-                # 启动热点
-                subprocess.run(["sudo", "nmcli", "connection", "up", "Pi-Dashcam"],
-                    capture_output=True, timeout=10)
+                start_hotspot()
                 self.osd_messages.append((time.time(), "🌐 已断开 WiFi，回到热点模式"))
             except Exception as e:
                 self.osd_messages.append((time.time(), f"❌ 断开 WiFi 失败: {e}"))
@@ -813,78 +772,61 @@ class DashcamWebServer:
         self._thread = None
         self._running = False
 
-        # 注入到请求处理器类
-        DashcamAPIHandler.camera_worker = camera_worker
-        DashcamAPIHandler.server_start_time = time.time()
-        DashcamAPIHandler.osd_messages = []
+        self._handler = type("DashcamRequestHandler", (DashcamAPIHandler,), {
+            "camera_worker": camera_worker,
+            "server_start_time": time.time(),
+            "osd_messages": [],
+            "known_plates_lock": threading.RLock(),
+        })
 
     # ---- 公开 API ----
 
     def add_osd_message(self, msg):
         """从主线程安全地添加 OSD 消息（仅追加到列表）"""
-        DashcamAPIHandler.osd_messages.append((time.time(), msg))
+        self._handler.osd_messages.append((time.time(), msg))
         # 保留最近 200 条
-        if len(DashcamAPIHandler.osd_messages) > 200:
-            DashcamAPIHandler.osd_messages = DashcamAPIHandler.osd_messages[-200:]
+        if len(self._handler.osd_messages) > 200:
+            self._handler.osd_messages = self._handler.osd_messages[-200:]
 
     def update_worker_ref(self, worker):
         """运行时更新 CameraWorker 引用"""
         self.camera_worker = worker
-        DashcamAPIHandler.camera_worker = worker
+        self._handler.camera_worker = worker
 
     def start(self):
-        """启动 Web 服务器（非阻塞，在守护线程中运行）"""
+        """先确认端口绑定成功，再启动可并发处理请求的后台服务。"""
         if self._running:
-            return
-
+            return f"http://{self.host}:{self.port}"
+        try:
+            self._httpd = ThreadingHTTPServer((self.host, self.port), self._handler)
+        except OSError as exc:
+            self._running = False
+            print(f"❌ Web 服务器启动失败 (端口 {self.port}): {exc}")
+            return None
+        self.port = self._httpd.server_port
         self._running = True
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
-
-        # 获取 IP 地址
-        ip = get_local_ip()
-        print(f"\n{'='*50}")
-        print(f"🌐 管理网页已启动！")
-        print(f"   📱 地址: http://{ip}:{self.port}")
-        if is_hotspot_active():
-            print(f"   🔥 热点模式: 连接 Pi-Dashcam WiFi 后访问")
-        print(f"{'='*50}\n")
-
+        status = get_network_status()
+        ip = status["ip"]
+        print(f"🌐 管理网页已启动: http://{ip}:{self.port}")
         return f"http://{ip}:{self.port}"
 
     def stop(self):
-        """停止 Web 服务器"""
         self._running = False
+        if self._httpd and self._thread and self._thread.is_alive():
+            self._httpd.shutdown()
+            self._thread.join(timeout=3)
         if self._httpd:
-            try:
-                self._httpd.shutdown()
-            except Exception:
-                pass
+            self._httpd.server_close()
         print("🌐 Web 服务器已停止")
 
     def _serve(self):
-        """服务器主循环（在守护线程中运行）"""
         try:
-            self._httpd = HTTPServer((self.host, self.port), DashcamAPIHandler)
-            self._httpd.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        except OSError as e:
-            print(f"❌ Web 服务器启动失败 (端口 {self.port}): {e}")
-            self._running = False
-            return
-
-        print(f"🌐 HTTP 服务器监听 {self.host}:{self.port}")
-
-        while self._running:
-            try:
-                self._httpd.handle_request()
-            except Exception:
-                if self._running:
-                    time.sleep(0.5)
-
-        try:
+            self._httpd.serve_forever(poll_interval=0.1)
+        finally:
             self._httpd.server_close()
-        except Exception:
-            pass
+            self._running = False
 
 
 # 延迟导入（避免循环依赖）

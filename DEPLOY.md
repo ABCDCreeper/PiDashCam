@@ -2,6 +2,8 @@
 
 从空白 SD 卡到完整可运行系统的分步指南。
 
+推荐先使用 [README.md](README.md) 中的一键安装脚本 `deploy.sh`。下文为旧版手动配置示例；一键安装使用 `pidashcam.service`、`/opt/pidashcam` 和 `/var/lib/pidashcam`，不需要另建 `cam` 用户或手动部署旧服务。
+
 ---
 
 ## 1. 硬件清单
@@ -111,10 +113,24 @@ DashCam 启动时如果没连 WiFi，会处于离线状态。可以先配热点�
 sudo nmcli connection add type wifi ifname wlan0 con-name Pi-Dashcam \
     autoconnect yes ssid Pi-Dashcam
 sudo nmcli connection modify Pi-Dashcam 802-11-wireless.mode ap \
-    802-11-wireless.band bg ipv4.method shared
+    802-11-wireless.band bg ipv4.method shared connection.autoconnect-priority -999
 sudo nmcli connection modify Pi-Dashcam wifi-sec.key-mgmt wpa-psk \
-    wifi-sec.psk "dashcam123"
+    wifi-sec.psk "12345678"
 ```
+
+热点由 `network_manager.py` 统一管理，默认 SSID 为 `Pi-Dashcam`，密码为 `12345678`。
+通过界面开启热点会将已有同名配置更新为这些值。连接其他 Wi-Fi 时会暂时关闭热点自动连接，
+保留 2 秒网卡模式切换等待；连接失败则恢复原热点。
+
+非 root 服务用户需要无密码执行 `nmcli` 的权限；应用使用 `sudo -n`，不会等待密码输入。
+用 `command -v nmcli` 核对路径，再执行 `sudo visudo -f /etc/sudoers.d/dashcam-network`，
+加入下列规则（`cam` 替换为实际运行用户）：
+
+```sudoers
+cam ALL=(root) NOPASSWD: /usr/bin/nmcli
+```
+
+可用 `sudo -n nmcli radio wifi` 检查该权限。缺少权限时应用会明确报告失败。
 
 ### 3.6 启用 seatd 并配置权限（Wayland 必需）
 
@@ -221,9 +237,21 @@ AmbientCapabilities=CAP_DAC_OVERRIDE CAP_NET_BIND_SERVICE
 ```bash
 cd ~/DashCam
 python3 -m py_compile main.py web_server.py core_camera.py \
-    ui_mainwindow.py ui_wifi.py ui_keyboard.py touch_widgets.py
+    ui_mainwindow.py ui_wifi.py ui_keyboard.py touch_widgets.py network_manager.py
 echo "语法检查通过"
 ```
+
+可在安装上述 Python 依赖和 ffmpeg 的 Linux 环境中运行回归检查：
+
+```bash
+python3 check_debug.py
+python3 check_storage.py
+```
+
+扩展检查还覆盖 Web 请求解析、快照缓存、暂停拖动、文件删除保护和退出流程；本机端口测试在沙箱禁止监听时会标为跳过。
+网络检查使用模拟命令，不修改主机网络；录像检查使用真实 H.264 编码，验证低帧率和变化帧率下的时长、停止后重录及拖动定位。
+修复后的录像按实际到帧时间补帧，保持设置帧率和正常时长；补帧不会增加摄像头实际捕获的细节。
+旧版已经加速的文件不受此次修复影响。
 
 ### 4.5 手动启动测试
 
@@ -250,7 +278,7 @@ import time; time.sleep(60)  # 运行 60 秒供测试
 # 另一个终端：curl http://127.0.0.1/api/status
 ```
 
-启动后，手机连接 `Pi-Dashcam` 热点（密码 `dashcam123`），浏览器访问 `http://192.168.x.x` 即可看到管理仪表盘。
+启动后，手机连接 `Pi-Dashcam` 热点（密码 `12345678`），浏览器访问 `http://192.168.x.x` 即可看到管理仪表盘。
 
 ---
 
@@ -388,3 +416,5 @@ sudo journalctl -u dashcam -f  # 实时日志
 ├── wifi_passwords.json   # 记忆的 WiFi 密码
 └── plates_log.json       # 车牌识别日志（在 U 盘上）
 ```
+
+存储界面使用后台检测结果，显示当前录像设备、剩余与总容量。循环清理只覆盖 REC_ 开头的行车录像；其他视频和配置保留。挂载失效或空间无法回收时停止录制并提示，不回退到系统盘。

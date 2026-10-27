@@ -1,14 +1,13 @@
 # ui_mainwindow.py
 import os
 import json
-import time
 import threading
 import subprocess
 from datetime import datetime
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QPushButton, QLabel, QStackedWidget, QListWidget, 
+from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                             QPushButton, QLabel, QStackedWidget, QListWidget,
                              QListWidgetItem, QMessageBox,
                              QSizePolicy, QDialog, QProgressBar, QFrame)
 
@@ -16,6 +15,8 @@ from ui_keyboard import TouchKeyboard
 from ui_wifi import WifiScannerDialog
 from touch_widgets import TapSlider, TouchScrollListWidget
 from core_camera import SystemUtils, CameraWorker
+from network_manager import (get_network_status, start_hotspot, connect_wifi,
+                             HOTSPOT_NAME, HOTSPOT_PASSWORD)
 
 
 class TimeSettingDialog(QDialog):
@@ -30,9 +31,9 @@ class TimeSettingDialog(QDialog):
         layout.setContentsMargins(10, 6, 10, 6)
         layout.setSpacing(4)
 
-        title = QLabel("🕐 修改系统时间")
+        title = QLabel(" 修改系统时间")
         title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("color: #00aaff; font-size: 20px; font-weight: bold; padding: 2px;")
+        title.setStyleSheet("color: #a5b9cc; font-size: 20px; font-weight: bold; padding: 2px;")
         layout.addWidget(title)
 
         # 实时系统时钟（每秒刷新）
@@ -71,13 +72,13 @@ class TimeSettingDialog(QDialog):
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
-        btn_confirm = QPushButton("💾 保存")
+        btn_confirm = QPushButton(" 保存")
         btn_confirm.setStyleSheet(
             "background-color: #0088cc; font-size: 17px; font-weight: bold; "
             "min-height: 45px; border-radius: 6px;"
         )
         btn_confirm.clicked.connect(self._confirm)
-        btn_cancel = QPushButton("❌ 取消")
+        btn_cancel = QPushButton(" 取消")
         btn_cancel.setStyleSheet(
             "background-color: #a93226; font-size: 17px; "
             "min-height: 45px; border-radius: 6px;"
@@ -118,7 +119,7 @@ class TimeSettingDialog(QDialog):
         val_lbl.setStyleSheet(
             "color: #fff; font-size: 20px; font-weight: bold; "
             "min-width: 72px; min-height: 42px; "
-            "background-color: #1a1a1a; border: 2px solid #333; border-radius: 6px;"
+            "background-color: #1a1a1a; border: 1px solid #333; border-radius: 6px;"
         )
         self.val_labels[field] = val_lbl
         current = getattr(self, field)
@@ -232,7 +233,7 @@ class TimeSettingDialog(QDialog):
 
             parent = self.parent()
             if parent and hasattr(parent, "show_osd_message"):
-                parent.show_osd_message(f"✅ 时间已更新: {time_str}")
+                parent.show_osd_message(f" 时间已更新: {time_str}")
             self.accept()
         else:
             QMessageBox.warning(self, "设置失败",
@@ -242,12 +243,12 @@ class TimeSettingDialog(QDialog):
 class RecordingSettingsDialog(QDialog):
     """全屏触控视频录制参数设置对话框（按钮方式，无 Wayland 兼容问题）"""
     BTN_CHECKED = (
-        "background-color: #0073e6; font-size: 17px; font-weight: bold; "
-        "min-height: 44px; border-radius: 6px; border: 2px solid #00aaff;"
+        "background-color: #526d8a; font-size: 17px; font-weight: bold; "
+        "min-height: 44px; border-radius: 6px; border: 2px solid #a5b9cc;"
     )
     BTN_NORMAL = (
         "background-color: #1a1a1a; font-size: 17px; "
-        "min-height: 44px; border-radius: 6px; border: 2px solid #333;"
+        "min-height: 44px; border-radius: 6px; border: 1px solid #333;"
     )
 
     def __init__(self, parent=None, current_w=1280, current_h=720, current_fps=30,
@@ -272,9 +273,9 @@ class RecordingSettingsDialog(QDialog):
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(6)
 
-        title = QLabel("📹 视频录制参数")
+        title = QLabel(" 视频录制参数")
         title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("color: #00aaff; font-size: 20px; font-weight: bold; padding: 2px;")
+        title.setStyleSheet("color: #a5b9cc; font-size: 20px; font-weight: bold; padding: 2px;")
         layout.addWidget(title)
 
         self.lbl_current = QLabel()
@@ -301,13 +302,13 @@ class RecordingSettingsDialog(QDialog):
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
-        btn_save = QPushButton("💾 保存")
+        btn_save = QPushButton(" 保存")
         btn_save.setStyleSheet(
             "background-color: #0088cc; font-size: 17px; font-weight: bold; "
             "min-height: 44px; border-radius: 6px;"
         )
         btn_save.clicked.connect(self.accept)
-        btn_cancel = QPushButton("❌ 取消")
+        btn_cancel = QPushButton(" 取消")
         btn_cancel.setStyleSheet(
             "background-color: #a93226; font-size: 17px; "
             "min-height: 44px; border-radius: 6px;"
@@ -386,31 +387,33 @@ class DashcamMainWindow(QMainWindow):
     # 标准跨线程信号，确保后台线程分发的 UI 通知 100% 到达且不崩溃
     osd_signal = pyqtSignal(str)
     net_status_signal = pyqtSignal(str)
+    wifi_password_retry = pyqtSignal(str, str)
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("行车记录仪 - 车载大触屏增强版")
+        self.setWindowTitle("行车记录仪")
         # 全面放大车载触摸屏 UI 样式：大按键、高列表、大拖拽球
         self.setStyleSheet("""
             QMainWindow { background-color: #000; }
-            QPushButton { 
-                background-color: #1a1a1a; color: #fff; border: 2px solid #333; 
-                border-radius: 6px; font-size: 18px; font-weight: bold; min-height: 55px; padding: 5px;
+            QPushButton {
+                background-color: #1a1a1a; color: #fff; border: 1px solid #333;
+                border-radius: 6px; font-size: 18px; font-weight: 500; min-height: 55px; padding: 5px;
             }
-            QPushButton:pressed { background-color: #0073e6; }
-            QPushButton:checked { background-color: #b03a2e; border-color: #922b21; }
+            QPushButton:pressed { background-color: #526d8a; }
+            QPushButton:checked { background-color: #b03a2e; border-color: #773e43; }
             QLabel { color: #ccc; font-size: 16px; }
             QRadioButton { color: #fff; font-size: 18px; font-weight: bold; padding: 10px; }
             QRadioButton::indicator { width: 25px; height: 25px; }
-            
+
             QListWidget { background-color: #111; color: white; border: 1px solid #333; font-size: 18px; outline: none; }
             QListWidget::item { min-height: 65px; padding-left: 15px; border-bottom: 1px solid #222; }
-            QListWidget::item:selected { background-color: #0073e6; color: white; font-weight: bold; }
+            QListWidget::item:selected { background-color: #526d8a; color: white; font-weight: bold; }
         """)
 
         # 绑定跨线程通信槽函数
         self.osd_signal.connect(self.show_osd_message)
         self.net_status_signal.connect(self.update_network_lbl)
+        self.wifi_password_retry.connect(self._retry_wifi_password)
 
         self.worker = CameraWorker()
         self.worker.frame_ready.connect(self.update_monitor)
@@ -419,14 +422,16 @@ class DashcamMainWindow(QMainWindow):
         self.worker.storage_path_changed.connect(self.on_storage_path_changed)
         self.worker.recording_toggled.connect(self.on_recording_toggled)
         self.worker.gps.gps_data_updated.connect(self.update_gps_status)
+        self.worker.storage_devices_updated.connect(self.refresh_storage_ui)
         self.worker.start_camera()
 
         self.init_ui()
-        
+
         # 延迟1秒自动开启录像 (满足从开机到断电持续录制需求)
         QTimer.singleShot(1000, self.auto_start_recording)
-        
+
         # 启动定时轮询网络状态（每 5 秒查一次 Wi-Fi/热点状态）
+        self._network_poll_lock = threading.Lock()
         self.net_timer = QTimer(self)
         self.net_timer.timeout.connect(self.poll_network_status)
         self.net_timer.start(5000)
@@ -439,7 +444,7 @@ class DashcamMainWindow(QMainWindow):
         if not self.btn_record.isChecked():
             self.btn_record.setChecked(True)
             self.toggle_record()
-            self.show_osd_message("⚡ 开机自动录像已开启")
+            self.show_osd_message(" 开机自动录像已开启")
 
     def init_ui(self):
         main_widget = QWidget()
@@ -448,17 +453,17 @@ class DashcamMainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        self.video_label = QLabel("正在启动高清摄像头与 AI 系统...")
+        self.video_label = QLabel("正在启动摄像头…")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setStyleSheet("background-color: #000; font-size: 20px;")
         self.video_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         main_layout.addWidget(self.video_label, stretch=8)
-        
+
         # 画面左侧“网络连接状态栏” (修改定位到左下角)
-        self.net_status_lbl = QLabel("🌐 网络: 查询中...", self.video_label)
-        self.net_status_lbl.setStyleSheet("color: #00ff66; background-color: rgba(0, 0, 0, 160); font-size: 16px; font-weight: bold; padding: 6px 10px; border-radius: 4px;")
+        self.net_status_lbl = QLabel(" 网络: 查询中...", self.video_label)
+        self.net_status_lbl.setStyleSheet("color: #8db5a0; background-color: rgba(0, 0, 0, 160); font-size: 16px; font-weight: bold; padding: 6px 10px; border-radius: 4px;")
         self.net_status_lbl.adjustSize()
-        # 🌟 修改这里：定位到左下角 (距离左边15px，距离底部15px)
+        #  修改这里：定位到左下角 (距离左边15px，距离底部15px)
         self.net_status_lbl.move(15, self.video_label.height() - self.net_status_lbl.height() - 15)
         self.net_status_lbl.show()
 
@@ -467,16 +472,16 @@ class DashcamMainWindow(QMainWindow):
         self.osd_msg.setAlignment(Qt.AlignCenter)
         self.osd_msg.setStyleSheet("background-color: rgba(0, 0, 0, 200); color: #39ff14; font-size: 22px; font-weight: bold;")
         self.osd_msg.hide()
-        
+
         # 右上角 AI 车牌识别 OSD
         self.ai_status_lbl = QLabel(self.video_label)
-        self.ai_status_lbl.setStyleSheet("color: #00ffff; background-color: rgba(0, 0, 0, 180); font-size: 22px; font-weight: bold; padding: 8px 14px; border: 2px solid #00ffff; border-radius: 6px;")
+        self.ai_status_lbl.setStyleSheet("color: #b5c7d8; background-color: rgba(0, 0, 0, 180); font-size: 22px; font-weight: bold; padding: 8px 14px; border: 2px solid #b5c7d8; border-radius: 6px;")
         self.ai_status_lbl.hide()
 
-        # 全屏“请插入U盘”提示
-        self.no_usb_lbl = QLabel("⚠️ 未检测到U盘\n请插入U盘开始录制", self.video_label)
+        # 无存储设备提示
+        self.no_usb_lbl = QLabel(" 未检测到U盘\n请插入U盘开始录制", self.video_label)
         self.no_usb_lbl.setAlignment(Qt.AlignCenter)
-        self.no_usb_lbl.setStyleSheet("background-color: rgba(0, 0, 0, 220); color: #ff4444; font-size: 28px; font-weight: bold;")
+        self.no_usb_lbl.setStyleSheet("background-color: rgba(0, 0, 0, 220); color: #dc8888; font-size: 28px; font-weight: bold;")
         self.no_usb_lbl.hide()
 
         self.stack = QStackedWidget()
@@ -497,7 +502,7 @@ class DashcamMainWindow(QMainWindow):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(2)
-        
+
         # 录制参数行
         self.recording_params_lbl = QLabel()
         self.recording_params_lbl.setAlignment(Qt.AlignCenter)
@@ -505,25 +510,25 @@ class DashcamMainWindow(QMainWindow):
             "color: #aaa; font-size: 14px; font-weight: bold; padding: 1px;"
         )
         layout.addWidget(self.recording_params_lbl)
-        
+
         # 按钮行（4 个等大按钮）
         btn_row = QHBoxLayout()
         btn_row.setSpacing(6)
-        
-        self.btn_record = QPushButton("● 开始录像")
+
+        self.btn_record = QPushButton("开始录像")
         self.btn_record.setCheckable(True)
         self.btn_record.clicked.connect(self.toggle_record)
-        self.btn_record.setStyleSheet("background-color: #1b4f72; font-size: 18px;")
-        
-        btn_settings = QPushButton("⚙️ 系统设置")
+        self.btn_record.setStyleSheet("background-color: #304359; font-size: 18px;")
+
+        btn_settings = QPushButton(" 系统设置")
         btn_settings.clicked.connect(lambda: self.stack.setCurrentIndex(1))
-        
-        btn_playback = QPushButton("📂 视频回放")
+
+        btn_playback = QPushButton(" 视频回放")
         btn_playback.clicked.connect(self.open_playback_page)
-        
-        btn_video_settings = QPushButton("🎬 录制参数")
+
+        btn_video_settings = QPushButton(" 录制参数")
         btn_video_settings.clicked.connect(self.open_video_settings)
-        
+
         btn_row.addWidget(self.btn_record, stretch=3)
         btn_row.addWidget(btn_settings, stretch=2)
         btn_row.addWidget(btn_playback, stretch=2)
@@ -536,63 +541,63 @@ class DashcamMainWindow(QMainWindow):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(8)
-        
+
         # 统一状态面板（U盘 + GPS 集成在一个容器内）
         status_frame = QFrame()
-        status_frame.setStyleSheet("QFrame { background-color: #111; border: 2px solid #333; border-radius: 8px; }")
+        status_frame.setStyleSheet("QFrame { background-color: #111; border: 1px solid #333; border-radius: 8px; }")
         status_layout = QVBoxLayout(status_frame)
         status_layout.setContentsMargins(10, 8, 10, 8)
         status_layout.setSpacing(4)
-        
+
         # 标题行：U盘标签（左）+ GPS 状态（右）
         header_row = QHBoxLayout()
         header_row.setSpacing(10)
-        
+
         self.storage_label = QLabel("U盘状态: 检测中...")
-        self.storage_label.setStyleSheet("color: #00aaff; font-size: 18px; font-weight: bold; padding: 5px; border: none;")
+        self.storage_label.setStyleSheet("color: #a5b9cc; font-size: 18px; font-weight: bold; padding: 5px; border: none;")
         header_row.addWidget(self.storage_label)
-        
+
         header_row.addStretch()
-        
-        self.gps_status_lbl = QLabel("🛰 GPS: 检测中...")
+
+        self.gps_status_lbl = QLabel(" GPS: 检测中...")
         self.gps_status_lbl.setStyleSheet("color: #888; font-size: 16px; padding: 5px; border: none;")
         header_row.addWidget(self.gps_status_lbl)
-        
+
         status_layout.addLayout(header_row)
-        
+
         self.storage_bar = QProgressBar()
         self.storage_bar.setTextVisible(True)
         self.storage_bar.setMinimumHeight(40)
         self.storage_bar.setStyleSheet("""
-            QProgressBar { background-color: #222; border: 2px solid #444; border-radius: 6px; text-align: center; color: white; font-size: 16px; font-weight: bold; }
-            QProgressBar::chunk { background-color: #0073e6; border-radius: 4px; }
+            QProgressBar { background-color: #222; border: 1px solid #444; border-radius: 6px; text-align: center; color: white; font-size: 16px; font-weight: bold; }
+            QProgressBar::chunk { background-color: #526d8a; border-radius: 4px; }
         """)
         status_layout.addWidget(self.storage_bar)
-        
+
         self.storage_detail = QLabel("")
         self.storage_detail.setStyleSheet("color: #aaa; font-size: 14px; padding: 2px; border: none;")
         status_layout.addWidget(self.storage_detail)
-        
+
         layout.addWidget(status_frame)
 
         # 控制栏：返回（左）+ 热点、WiFi、修改时间
         row1 = QHBoxLayout()
         row1.setSpacing(10)
-        
-        btn_back = QPushButton("⬅")
+
+        btn_back = QPushButton("返回")
         btn_back.setFixedWidth(70)
         btn_back.setStyleSheet("font-size: 22px;")
         btn_back.clicked.connect(lambda: self.stack.setCurrentIndex(0))
-        
-        btn_ap = QPushButton("📡 开启车载热点")
+
+        btn_ap = QPushButton(" 开启车载热点")
         btn_ap.clicked.connect(self.start_ap_flow)
-        
-        btn_client = QPushButton("🌐 连接 Wi-Fi")
+
+        btn_client = QPushButton(" 连接 Wi-Fi")
         btn_client.clicked.connect(self.start_wifi_connection_flow)
-        
-        btn_time = QPushButton("🕐 修改系统时间")
+
+        btn_time = QPushButton(" 修改系统时间")
         btn_time.clicked.connect(self.open_time_setting)
-        
+
         row1.addWidget(btn_back)
         row1.addWidget(btn_ap)
         row1.addWidget(btn_client)
@@ -607,40 +612,40 @@ class DashcamMainWindow(QMainWindow):
         layout = QHBoxLayout(page)
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(10)
-        
+
         ctrl_layout = QVBoxLayout()
         ctrl_layout.setSpacing(6)
-        
+
         slider_box = QHBoxLayout()
         self.lbl_play_time = QLabel("00:00 / 00:00")
-        self.lbl_play_time.setStyleSheet("color: #00ffff; font-size: 18px; font-weight: bold; min-width: 120px;")
-        
+        self.lbl_play_time.setStyleSheet("color: #b5c7d8; font-size: 18px; font-weight: bold; min-width: 120px;")
+
         self.slider_progress = TapSlider(Qt.Horizontal)
         self.slider_progress.setStyleSheet("""
             QSlider::groove:horizontal { height: 16px; background: #222; border-radius: 8px; }
-            QSlider::sub-page:horizontal { background: #0073e6; border-radius: 8px; }
-            QSlider::handle:horizontal { width: 34px; height: 34px; margin: -9px 0; background: #fff; border-radius: 17px; border: 2px solid #0073e6; }
+            QSlider::sub-page:horizontal { background: #526d8a; border-radius: 8px; }
+            QSlider::handle:horizontal { width: 34px; height: 34px; margin: -9px 0; background: #fff; border-radius: 17px; border: 2px solid #526d8a; }
         """)
         self.slider_progress.sliderMoved.connect(self.on_slider_moved)
-        
+
         slider_box.addWidget(self.lbl_play_time)
         slider_box.addWidget(self.slider_progress)
         ctrl_layout.addLayout(slider_box)
-        
+
         btn_box = QHBoxLayout()
         btn_box.setSpacing(10)
         self.btn_play_pause = QPushButton("⏸ 暂停")
         self.btn_play_pause.setStyleSheet("background-color: #2c3e50;")
         self.btn_play_pause.clicked.connect(self.toggle_play_pause)
-        
+
         btn_exit = QPushButton("⏹ 退出回放")
-        btn_exit.setStyleSheet("background-color: #922b21;")
+        btn_exit.setStyleSheet("background-color: #773e43;")
         btn_exit.clicked.connect(self.stop_playback_and_back)
-        
+
         btn_box.addWidget(self.btn_play_pause)
         btn_box.addWidget(btn_exit)
         ctrl_layout.addLayout(btn_box)
-        
+
         layout.addLayout(ctrl_layout, stretch=6)
 
         self.list_videos = TouchScrollListWidget()
@@ -652,41 +657,31 @@ class DashcamMainWindow(QMainWindow):
         # 绝不在 UI 线程里直接调 stop_recording_file，交给后台底层逻辑无冲突完成
         self.worker.is_recording = self.btn_record.isChecked()
         if self.worker.is_recording:
-            self.btn_record.setText("■ 录像中 (点此停止)")
-            self.btn_record.setStyleSheet("background-color: #922b21; font-size: 20px;")
+            self.btn_record.setText("停止录像")
+            self.btn_record.setStyleSheet("background-color: #773e43; font-size: 20px;")
         else:
-            self.btn_record.setText("● 开始录像")
-            self.btn_record.setStyleSheet("background-color: #1b4f72; font-size: 20px;")
+            self.btn_record.setText("开始录像")
+            self.btn_record.setStyleSheet("background-color: #304359; font-size: 20px;")
 
-    def refresh_storage_ui(self):
-        """更新 U 盘空间条形图"""
-        devices = SystemUtils.get_storage_devices()
-        if not devices:
-            self.storage_label.setText("⚠️ 未检测到U盘")
+    def refresh_storage_ui(self, devices=None):
+        """使用后台检测结果，避免在触屏线程挂载或扫描磁盘。"""
+        devices = self.worker.storage_devices if devices is None else devices
+        active_path = self.worker.storage_path or self.worker._pending_storage_path
+        dev = next((item for item in devices if item["path"] == active_path), None)
+        if dev is None:
+            self.storage_label.setText("未连接存储设备")
             self.storage_bar.setValue(0)
-            self.storage_bar.setFormat("无U盘")
-            self.storage_bar.setStyleSheet("""
-                QProgressBar { background-color: #222; border: 2px solid #922b21; border-radius: 6px; text-align: center; color: #ff4444; font-size: 16px; font-weight: bold; }
-                QProgressBar::chunk { background-color: #922b21; border-radius: 4px; }
-            """)
-            self.storage_detail.setText("请插入U盘开始录制")
+            self.storage_bar.setFormat("无存储设备")
+            self.storage_detail.setText("插入 U 盘后自动检测。录像仅保存在 U 盘。")
             return
-        
-        dev = devices[0]  # 只有一个 U 盘
-        total_gb = round(dev["free_gb"] / (1 - dev["percent"] / 100), 1) if dev["percent"] > 0 else dev["free_gb"]
-        used_gb = round(total_gb - dev["free_gb"], 1)
-        pct = int(dev["percent"])
-        
-        self.storage_label.setText("U盘状态")
-        self.storage_bar.setMinimum(0)
-        self.storage_bar.setMaximum(100)
+        pct = min(100, max(0, int(dev["percent"])))
+        self.storage_label.setText(dev["name"].strip())
         self.storage_bar.setValue(pct)
         self.storage_bar.setFormat(f"已用 {pct}%")
-        self.storage_bar.setStyleSheet("""
-            QProgressBar { background-color: #222; border: 2px solid #444; border-radius: 6px; text-align: center; color: white; font-size: 16px; font-weight: bold; }
-            QProgressBar::chunk { background-color: #0073e6; border-radius: 4px; }
-        """)
-        self.storage_detail.setText(f"🟦 已用 {used_gb}G  |  🟩 剩余 {dev['free_gb']}G  |  总计 {total_gb}G")
+        total = dev.get("total_gb")
+        capacity = f" / 共 {total:.1f} GB" if total is not None else ""
+        self.storage_detail.setText(
+            f"剩余 {dev['free_gb']:.1f} GB{capacity}\n空间不足时覆盖最早的行车录像，其他文件保留。")
 
     def change_storage_path(self, btn):
         # 不再需要手动切换，U 盘自动检测
@@ -704,17 +699,17 @@ class DashcamMainWindow(QMainWindow):
         """后台录制状态变更 → 同步按钮"""
         self.btn_record.setChecked(recording)
         if recording:
-            self.btn_record.setText("■ 录像中 (点此停止)")
-            self.btn_record.setStyleSheet("background-color: #922b21; font-size: 20px;")
+            self.btn_record.setText("停止录像")
+            self.btn_record.setStyleSheet("background-color: #773e43; font-size: 20px;")
         else:
-            self.btn_record.setText("● 开始录像")
-            self.btn_record.setStyleSheet("background-color: #1b4f72; font-size: 20px;")
+            self.btn_record.setText("开始录像")
+            self.btn_record.setStyleSheet("background-color: #304359; font-size: 20px;")
         self._update_recording_params()
 
     def _update_recording_params(self):
         """更新首页录制参数标签"""
         w, h, fps = self.worker.width, self.worker.height, self.worker.fps_target
-        base = f"📹 {w}×{h} · {fps}fps"
+        base = f" {w}×{h} · {fps}fps"
         if self.worker.is_recording:
             base += "  ·  ● 录制中"
         self.recording_params_lbl.setText(base)
@@ -734,7 +729,7 @@ class DashcamMainWindow(QMainWindow):
             self.worker.apply_video_params(dlg.selected_w, dlg.selected_h, dlg.selected_fps)
             self._update_recording_params()
             self.show_osd_message(
-                f"✅ 视频参数已更新: {dlg.selected_w}×{dlg.selected_h} @ {dlg.selected_fps}fps"
+                f" 视频参数已更新: {dlg.selected_w}×{dlg.selected_h} @ {dlg.selected_fps}fps"
             )
 
     def open_time_setting(self):
@@ -760,7 +755,7 @@ class DashcamMainWindow(QMainWindow):
             else:
                 self.worker.playback_file = filepath
                 self.worker.is_playback = True
-                
+
             self.worker.is_paused = False
             self.btn_play_pause.setText("⏸ 暂停")
             self.btn_play_pause.setStyleSheet("background-color: #2c3e50;")
@@ -783,8 +778,8 @@ class DashcamMainWindow(QMainWindow):
         if total_frames > 0 and not self.slider_progress.isSliderDown():
             self.slider_progress.setMaximum(total_frames)
             self.slider_progress.setValue(current_frame)
-            
-            fps = 30
+
+            fps = self.worker.playback_fps
             cur_sec = int(current_frame / fps)
             tot_sec = int(total_frames / fps)
             self.lbl_play_time.setText(f"{cur_sec//60:02d}:{cur_sec%60:02d} / {tot_sec//60:02d}:{tot_sec%60:02d}")
@@ -799,7 +794,7 @@ class DashcamMainWindow(QMainWindow):
         label_size = self.video_label.size()
         scaled_pixmap = QPixmap.fromImage(q_img).scaled(label_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.video_label.setPixmap(scaled_pixmap)
-        
+
         # 实时定位车牌 OSD 到底部/右上角
         if status_text:
             self.ai_status_lbl.setText(status_text)
@@ -809,24 +804,24 @@ class DashcamMainWindow(QMainWindow):
             self.ai_status_lbl.show()
         else:
             self.ai_status_lbl.hide()
-        
-        # 全屏“请插入U盘”提示
+
+        # 无存储设备提示
         if not self.worker.storage_path:
             self.no_usb_lbl.resize(label_size)
             self.no_usb_lbl.show()
         else:
             self.no_usb_lbl.hide()
-            
+
         # 确保网络状态栏永远浮动在左上角
         y = self.video_label.height() - self.net_status_lbl.height() - 15
         self.net_status_lbl.move(15, max(0, y))
-        
+
     def show_osd_message(self, msg):
         self.osd_msg.setText(msg)
         self.osd_msg.resize(self.video_label.width(), self.video_label.height())
         self.osd_msg.show()
         QTimer.singleShot(3000, self.osd_msg.hide)
-        
+
     def update_network_lbl(self, text):
         self.net_status_lbl.setText(text)
         self.net_status_lbl.adjustSize()
@@ -836,85 +831,57 @@ class DashcamMainWindow(QMainWindow):
             return
         err = data.get("serial_error")
         if err:
-            self.gps_status_lbl.setText(f"🛰 GPS: 未连接 ({err})")
-            self.gps_status_lbl.setStyleSheet("color: #ff4444; font-size: 16px; padding: 5px;")
+            self.gps_status_lbl.setText(f" GPS: 未连接 ({err})")
+            self.gps_status_lbl.setStyleSheet("color: #dc8888; font-size: 16px; padding: 5px;")
         elif data.get("has_fix"):
             self.gps_status_lbl.setText(
-                f"🛰 GPS: {data['satellites']}颗卫星  |  {data['speed_kmh']:.0f} km/h  |  "
+                f" GPS: {data['satellites']}颗卫星  |  {data['speed_kmh']:.0f} km/h  |  "
                 f"{data['latitude']:.5f}°  {data['longitude']:.5f}°"
             )
-            self.gps_status_lbl.setStyleSheet("color: #00ff66; font-size: 16px; padding: 5px;")
+            self.gps_status_lbl.setStyleSheet("color: #8db5a0; font-size: 16px; padding: 5px;")
         else:
-            self.gps_status_lbl.setText("🛰 GPS: 等待定位...")
+            self.gps_status_lbl.setText(" GPS: 等待定位...")
             self.gps_status_lbl.setStyleSheet("color: #ffaa00; font-size: 16px; padding: 5px;")
 
     def poll_network_status(self):
-        """后台轮询 NetworkManager 当前活动连接"""
-        threading.Thread(target=self._bg_poll_network, daemon=True).start()
+        """最多保留一个后台状态查询，避免 nmcli 缓慢时线程堆积。"""
+        if self._network_poll_lock.acquire(blocking=False):
+            threading.Thread(target=self._poll_network_once, daemon=True).start()
+
+    def _poll_network_once(self):
+        try:
+            self._bg_poll_network()
+        finally:
+            self._network_poll_lock.release()
 
     def _bg_poll_network(self):
-        try:
-            cmd = ["sudo", "nmcli", "-t", "-f", "TYPE,NAME", "connection", "show", "--active"]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-            lines = res.stdout.strip().split('\n')
-            
-            status_str = "⚠️ 网络未连 (离线)"
-            for line in lines:
-                if "802-11-wireless" in line or "wifi" in line:
-                    parts = line.split(':')
-                    if len(parts) >= 2:
-                        name = parts[1]
-                        if name == "Pi-Dashcam" or "Hotspot" in name:
-                            status_str = f"📡 热点开启中: {name}"
-                        else:
-                            status_str = f"🌐 Wi-Fi 已连: {name}"
-                        break
-            
-            # 获取 wlan0 的 IPv4 地址
-            if "🌐" in status_str or "📡" in status_str:
-                try:
-                    ip_cmd = ["sudo", "nmcli", "-t", "-f", "IP4.ADDRESS", "device", "show", "wlan0"]
-                    ip_res = subprocess.run(ip_cmd, capture_output=True, text=True, timeout=5)
-                    for ip_line in ip_res.stdout.strip().split('\n'):
-                        if ':' in ip_line:
-                            addr = ip_line.split(':', 1)[1].split('/')[0]
-                            if addr:
-                                status_str += f"  |  IP: {addr}"
-                                break
-                except Exception:
-                    pass
-            
-            self.net_status_signal.emit(status_str)
-        except Exception:
-            pass
+        status = get_network_status()
+        if status["mode"] == "hotspot":
+            text = f" 热点开启中: {status['ssid']}"
+        elif status["mode"] == "wifi":
+            text = f" Wi-Fi 已连: {status['ssid']}"
+        elif status["mode"] == "disconnected":
+            text = " 网络未连 (离线)"
+        else:
+            text = " 网络状态查询失败"
+        if status["ip"] != "未知":
+            text += f"  |  IP: {status['ip']}"
+        self.net_status_signal.emit(text)
 
     def start_ap_flow(self):
-        self.show_osd_message("正在开启车载热点\nPi-Dashcam...")
+        self.show_osd_message(f"正在开启车载热点\n{HOTSPOT_NAME}...")
         threading.Thread(target=self._bg_start_ap, daemon=True).start()
 
     def _bg_start_ap(self):
         try:
-            # 1. 尝试直接拉起已有的 Pi-Dashcam 热点配置
-            up_cmd = ["sudo", "nmcli", "connection", "up", "Pi-Dashcam"]
-            res = subprocess.run(up_cmd, capture_output=True, text=True, timeout=10)
-            
-            if res.returncode != 0:
-                # 2. 如果没有建立过，则从头创建并启动热点
-                cmd = ["sudo", "nmcli", "device", "wifi", "hotspot", "ifname", "wlan0", "ssid", "Pi-Dashcam", "password", "12345678"]
-                res = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-                
-            if res.returncode == 0:
-                msg = "✅ 热点开启成功!\nWi-Fi: Pi-Dashcam\n密码: 12345678"
-            else:
-                msg = f"❌ 开启热点失败:\n{res.stderr.strip()[:40]}"
-        except Exception:
-            msg = f"❌ 热点执行超时或异常"
-            
-        # 标准跨线程信号发送，保证 100% 触发 UI 弹窗
+            start_hotspot()
+            msg = f" 热点开启成功!\nWi-Fi: {HOTSPOT_NAME}\n密码: {HOTSPOT_PASSWORD}"
+        except Exception as exc:
+            msg = f" 开启热点失败:\n{exc}"
         self.osd_signal.emit(msg)
         self.poll_network_status()
 
-    # 🌟 新增：读取和保存 Wi-Fi 密码的辅助方法（优先 U 盘）
+    #  新增：读取和保存 Wi-Fi 密码的辅助方法（优先 U 盘）
     def load_saved_wifi(self):
         # 优先从 U 盘读取
         if self.worker.storage_path:
@@ -949,19 +916,23 @@ class DashcamMainWindow(QMainWindow):
         except Exception:
             pass
 
-    # 🌟 升级：支持检查是否已记住了密码
+    #  升级：支持检查是否已记住了密码
     def start_wifi_connection_flow(self):
         scanner = WifiScannerDialog(self)
-        if scanner.exec_() == QDialog.Accepted and scanner.selected_bssid:
+        if scanner.exec_() == QDialog.Accepted and scanner.selected_ssid:
             target_ssid = scanner.selected_ssid
             target_bssid = scanner.selected_bssid
-            
+
             # 检查记忆库
             saved_wifis = self.load_saved_wifi()
-            if target_ssid in saved_wifis:
+            if not scanner.selected_secured:
+                self.show_osd_message(f"正在连接开放 Wi-Fi:\n{target_ssid}...")
+                threading.Thread(target=self._bg_connect_wifi,
+                                 args=(target_ssid, "", False, target_bssid), daemon=True).start()
+            elif target_ssid in saved_wifis:
                 # 记住了！直接用保存的密码秒连，不用再弹键盘！
                 password = saved_wifis[target_ssid]
-                self.show_osd_message(f"⚡ 使用已记住密码连接:\n{target_ssid}...")
+                self.show_osd_message(f" 使用已记住密码连接:\n{target_ssid}...")
                 threading.Thread(target=self._bg_connect_wifi, args=(target_ssid, password, False, target_bssid), daemon=True).start()
             else:
                 # 没记住，弹触控键盘输密码
@@ -972,49 +943,23 @@ class DashcamMainWindow(QMainWindow):
                     # 传入 True，连接成功后自动记忆！
                     threading.Thread(target=self._bg_connect_wifi, args=(target_ssid, password, True, target_bssid), daemon=True).start()
 
-    # 🌟 升级：解决从热点切换到 Wi-Fi 失败的硬件竞争问题
     def _bg_connect_wifi(self, ssid, password, need_save=False, bssid=""):
         try:
-            # 1. 核心修复：单网卡从 AP 切 Client，必须彻底杀掉热点并断开设备！
-            subprocess.run(["sudo", "nmcli", "connection", "down", "Pi-Dashcam"], capture_output=True)
-            subprocess.run(["sudo", "nmcli", "device", "disconnect", "wlan0"], capture_output=True)
-            # 2. 关键留白：强制休眠 2 秒！留给 Linux 内核把网卡从 AP 广播模式切换回监听模式
-            time.sleep(2.0)
-            
-            # 3. 反复扫描直到目标 SSID 出现（最多 3 次，每次间隔 2 秒）
-            ssid_visible = False
-            for attempt in range(3):
-                subprocess.run(
-                    ["sudo", "nmcli", "device", "wifi", "list", "--rescan", "yes"],
-                    capture_output=True, timeout=15
-                )
-                # 检查目标 SSID 是否在扫描结果中
-                check_fields = "SSID,BSSID" if bssid else "SSID"
-                check = subprocess.run(
-                    ["sudo", "nmcli", "-t", "-f", check_fields, "device", "wifi", "list"],
-                    capture_output=True, text=True, timeout=10
-                )
-                target_match = bssid if bssid else ssid
-                if target_match in check.stdout:
-                    ssid_visible = True
-                    break
-                time.sleep(2.0)
-            if not ssid_visible:
-                raise Exception(f"未扫描到 {bssid or ssid}")
-            
-            # 4. 发起连接
-            target = bssid if bssid else ssid
-            cmd = ["sudo", "nmcli", "device", "wifi", "connect", target, "password", password]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if res.returncode == 0:
-                msg = f"✅ 成功连接至 Wi-Fi:\n{ssid}"
-                if need_save:
-                    self.save_wifi_password(ssid, password) # 成功才记住密码
-            else:
-                err = res.stderr.strip()[-80:] if res.stderr else "无详细信息"
-                msg = f"❌ 连接失败:\n{err}"
-        except Exception as e:
-            msg = f"❌ Wi-Fi 连接超时: {e}"
-            
+            connect_wifi(ssid, password, bssid)
+            msg = f" 已连接 Wi-Fi:\n{ssid}"
+            if need_save:
+                self.save_wifi_password(ssid, password)
+        except Exception as exc:
+            msg = f" Wi-Fi 连接失败:\n{exc}"
+            if password and not need_save:
+                self.wifi_password_retry.emit(ssid, bssid)
         self.osd_signal.emit(msg)
-        self.poll_network_status() # 成功后同步更新左下角网络状态
+        self.poll_network_status()
+
+    def _retry_wifi_password(self, ssid, bssid):
+        """记忆密码失效后在 UI 线程允许重输，避免永远重复旧密码。"""
+        kb = TouchKeyboard(self, title=f"连接失败，请核对 Wi-Fi 密码: {ssid}")
+        if kb.exec_() == QDialog.Accepted:
+            self.show_osd_message(f"正在重新连接:\n{ssid}...")
+            threading.Thread(target=self._bg_connect_wifi,
+                             args=(ssid, kb.get_password(), True, bssid), daemon=True).start()

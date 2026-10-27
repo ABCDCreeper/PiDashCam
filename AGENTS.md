@@ -18,10 +18,13 @@ pip install pyserial
 python main.py
 
 # Syntax-check all modules
-python -m py_compile main.py core_camera.py ui_mainwindow.py ui_wifi.py ui_keyboard.py touch_widgets.py
+python -m py_compile main.py core_camera.py ui_mainwindow.py ui_wifi.py ui_keyboard.py touch_widgets.py web_server.py network_manager.py
+
+# Regression checks (mocked NetworkManager; real ffmpeg media, no hardware)
+python check_debug.py
 ```
 
-No unit tests, linter config, or CI. `py_compile` is the sole pre-deploy check. GPS serial requires `/dev/serial0` at 9600 baud (微雪 L76X default).
+No linter config or CI. Run syntax checks and `check_debug.py` before deployment. GPS serial requires `/dev/serial0` at 9600 baud (微雪 L76X default).
 
 ## Architecture
 
@@ -107,7 +110,7 @@ Runtime data stored under `~/Videos/`: recordings, `wifi_passwords.json`, `stora
 
 - **Linux-only code.** `lsblk`, `nmcli`, `sudo mount/date/hwclock`, `/dev/serial0` will fail elsewhere. Syntax-check only on non-Linux.
 - **Don't break signal/slot wiring.** Cross-thread signals are the backbone; adding a direct widget call from a background thread will crash. The signal list: `frame_ready`, `playback_progress`, `storage_notify`, `storage_path_changed`, `recording_toggled`, `gps_data_updated`, `osd_signal`, `net_status_signal`.
-- **The 2-second `time.sleep(2.0)` in `_bg_connect_wifi` is load-bearing.** It waits for wlan0 to switch from AP master → client managed mode.
+- **The 2-second `time.sleep(2.0)` in `network_manager.connect_wifi` is load-bearing.** It waits for wlan0 to switch from AP master → client managed mode.
 - **LPR model loads async** in a daemon thread; `self.lpr_catcher` may be `None` for several seconds after startup. LPR inference runs on a separate thread per frame; `self.lpr_busy` guards against concurrent inference.
 - **GPS serial is optional.** If `pyserial` is not installed or `/dev/serial0` fails, `GPSWorker` emits an empty dict with `serial_error` set. Code should gracefully degrade — GPS OSD overlay is skipped entirely when `serial_error` is not None.
 - **USB auto-mount uses `sudo chmod -R 777`** on `/mnt/usb_*` directories after mount. This is intentional for the root-running Pi setup — do not replace with finer-grained permissions without confirming the deployment user context.
@@ -116,4 +119,12 @@ Runtime data stored under `~/Videos/`: recordings, `wifi_passwords.json`, `stora
 - **After any code change, commit with an English message** and push via SFTP for hardware testing.
 - **DS3231 RTC** is the hardware clock; time changes must run `sudo hwclock --systohc` to persist across reboots.
 - **Plates log** caps at 3000 entries; `plates_log.json` lives on the USB storage path, not `~/Videos/`.
-- **Network polling** runs every 5 seconds via QTimer; uses `nmcli -t connection show --active` to detect 802-11-wireless or wifi connections.
+- **Network control** is shared by touch UI and Web in `network_manager.py`, serialized by a lock. Parse nmcli escaping with `split_nmcli_line`; identify APs by wireless mode, not connection names. Polling runs every 5 seconds with one in-flight poll.
+- **Recording timing** uses ffmpeg wallclock input timestamps and CFR duplication. Do not return to assigning a fixed timestamp increment per captured frame; actual capture throughput can be much lower than the configured frame rate. Playback UI uses `worker.playback_fps`.
+
+- **Snapshots** use `CameraWorker.get_snapshot_jpeg()` and the preview cache. Never call `worker.cap.read()` from HTTP handlers.
+- **Web server** uses per-instance handlers and `ThreadingHTTPServer.serve_forever()`; pair it with `shutdown()` to stop safely. Video routes only accept recordings; protect the active file and serialize known-plate updates.
+
+- **Storage**: `storage_devices_updated` publishes cached devices to UI/Web. Do not mount/scan from UI callbacks. Verify a writable mount before opening segments. Cleanup only `REC_*.mkv/mp4`, keeps other files, and fails safely if reserve cannot be met. Run `python check_storage.py`.
+
+- **One-command installer**: `deploy.sh` targets Debian/Raspberry Pi OS Lite arm64 (12+). Run `bash -n deploy.sh` and `python scripts/check_deploy.py` after changes. Installer tests mock host mutations in temporary directories. Managed service/data paths are documented in README.md; do not run the installer on the development host.
