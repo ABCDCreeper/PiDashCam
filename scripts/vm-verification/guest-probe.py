@@ -23,6 +23,7 @@ print('PIDASHCAM_VM_PROBE_BEGIN',flush=True)
 try:
     # Save the actual kiosk result before starting a separate offscreen application.
     RESULT['kiosk_service']=command('systemctl','show','pidashcam','-p','ActiveState','-p','SubState').stdout.strip()
+    RESULT['kiosk_journal']=command('journalctl','-u','pidashcam','-b','-n','25','--no-pager').stdout
     command('systemctl','stop','pidashcam')
     RESULT['checks']['nginx_active']=command('systemctl','is-active','--quiet','nginx').returncode==0
     pwfile=Path('/var/lib/pidashcam/admin-password')

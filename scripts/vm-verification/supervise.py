@@ -4,15 +4,17 @@ from pathlib import Path
 work,results=map(Path,sys.argv[1:3]);partuuid,mode=sys.argv[3:5]
 results.mkdir(exist_ok=True)
 base=['docker','run','--rm','--name','pidashcam-vm-test','--network','none','-v',f'{work}:/vm','pidashcam-qemu','qemu-system-aarch64']
-common=['-accel','tcg,thread=multi','-smp','4','-m','2G','-display','none','-serial','stdio','-monitor','none','-no-reboot']
+common=['-accel','tcg,thread=multi','-smp','4','-m','2G','-display','none','-serial','stdio','-monitor','none','-no-reboot','-nic','none']
 cmdline=f'root=PARTUUID={partuuid} rootfstype=ext4 rootwait rw console=ttyAMA0,115200 loglevel=4 systemd.show_status=yes'
 if mode=='raspi4b':
     args=['-M','raspi4b','-kernel','/vm/kernel8.img','-dtb','/vm/rpi4.dtb',
           '-drive','file=/vm/test.img,if=sd,format=raw','-append',cmdline+' earlycon=pl011,mmio32,0xfe201000']
-    timeout=240
+    if (work/'rpi-initrd').exists():args+=['-initrd','/vm/rpi-initrd']
+    timeout=300
 else:
     args=['-M','virt','-cpu','max','-kernel','/vm/virt-kernel','-initrd','/vm/virt-initrd',
           '-drive','file=/vm/test.img,if=none,id=rootdisk,format=raw','-device','virtio-blk-pci,drive=rootdisk',
+          '-object','rng-random,filename=/dev/urandom,id=rng0','-device','virtio-rng-pci,rng=rng0',
           '-append',cmdline]
     timeout=900
 process=subprocess.Popen(base+common+args,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)

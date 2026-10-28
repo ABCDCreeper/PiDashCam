@@ -36,7 +36,7 @@ jobs:
       - name: Install verification tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xz-utils util-linux e2fsprogs python3 cpio
+          sudo apt-get install -y --no-install-recommends xz-utils util-linux e2fsprogs python3 cpio device-tree-compiler
           docker build -t pidashcam-qemu scripts/vm-verification
           docker run --rm pidashcam-qemu qemu-system-aarch64 -machine help | grep raspi4b
       - name: Boot a test copy and run guest probes

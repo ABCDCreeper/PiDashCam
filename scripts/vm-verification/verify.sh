@@ -28,6 +28,17 @@ mount "${LOOP}p2" "$ROOT"
 mount "${LOOP}p1" "$ROOT/boot/firmware"
 cp "$ROOT/boot/firmware/kernel8.img" "$WORK/kernel8.img"
 cp "$ROOT/boot/firmware/bcm2711-rpi-4-b.dtb" "$WORK/rpi4.dtb"
+if [[ -f $ROOT/boot/firmware/initramfs8 ]]; then
+    cp "$ROOT/boot/firmware/initramfs8" "$WORK/rpi-initrd"
+fi
+# QEMU does not run the Pi firmware overlays. Adapt only the disposable DTB:
+# enable its serial console and legacy SD host, and avoid unimplemented power GPIOs.
+fdtput -t s "$WORK/rpi4.dtb" /soc/serial@7e201000 status okay
+fdtput -t s "$WORK/rpi4.dtb" /soc/mmc@7e202000 status okay
+fdtput -d "$WORK/rpi4.dtb" /soc/mmc@7e202000 vmmc-supply || true
+fdtput -d "$WORK/rpi4.dtb" /soc/mmc@7e202000 vqmmc-supply || true
+# The Pi RNG is not modeled; seed this private VM from the runner's entropy source.
+fdtput -t bx "$WORK/rpi4.dtb" /chosen rng-seed $(od -An -tx1 -N64 /dev/urandom)
 ROOT_PARTUUID=$(blkid -s PARTUUID -o value "${LOOP}p2")
 # Skip interactive enrollment only on the disposable test copy, never on the artifact.
 ln -sfn /dev/null "$ROOT/etc/systemd/system/userconfig.service"
