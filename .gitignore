@@ -9,3 +9,6 @@ test_*.py
 *.docx
 
 /image-output/
+
+/vm-artifact/
+/vm-results/
