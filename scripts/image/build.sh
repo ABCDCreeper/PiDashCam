@@ -105,8 +105,17 @@ sync
 umount -R "$ROOT"
 losetup -d "$LOOP"
 LOOP=
-# Filesystem check after all writes; never upload an image that failed verification.
-LOOP=$(losetup --find --show --read-only --partscan "$IMAGE")
+# Replay any pending journal and reconcile allocation counters offline. A read-only
+# e2fsck cannot replay the journal and can report stale counters as errors.
+LOOP=$(losetup --find --show --partscan "$IMAGE")
+udevadm settle
+set +e
+e2fsck -pf "${LOOP}p2"
+FS_STATUS=$?
+set -e
+(( FS_STATUS <= 1 )) || exit "$FS_STATUS"
+sync
+# A separate read-only pass must still succeed; never suppress verification errors.
 e2fsck -fn "${LOOP}p2"
 fsck.vfat -n "${LOOP}p1"
 losetup -d "$LOOP"
