@@ -7,3 +7,5 @@ test_*.py
 .vscode/
 ~$*
 *.docx
+
+/image-output/

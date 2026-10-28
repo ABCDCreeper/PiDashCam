@@ -1,0 +1,56 @@
+name: Build Raspberry Pi image
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/build-image.yml
+      - scripts/image/**
+permissions:
+  contents: read
+concurrency:
+  group: raspberry-pi-image-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  image:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install image tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xz-utils e2fsprogs dosfstools util-linux rsync curl python3
+      - name: Check build scripts
+        run: |
+          bash -n scripts/image/build.sh scripts/image/provision.sh scripts/image/firstboot.sh
+          python3 scripts/image/check_config.py
+      - name: Build offline-ready ARM64 image
+        env:
+          IMAGE_OUTPUT: ${{ github.workspace }}/image-output
+        run: |
+          mkdir -p "$IMAGE_OUTPUT"
+          set -o pipefail
+          sudo --preserve-env=IMAGE_OUTPUT bash scripts/image/build.sh 2>&1 | tee "$IMAGE_OUTPUT/build.log"
+      - name: Upload flashable image and checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: PiDashCam-RPi4B-arm64-800x480
+          path: |
+            image-output/*.img.xz
+            image-output/SHA256SUMS
+            image-output/build-manifest.json
+            image-output/FLASHING.md
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raspberry-pi-image-build-log
+          path: image-output/build.log
+          if-no-files-found: ignore
+          retention-days: 14

@@ -24,7 +24,7 @@ python -m py_compile main.py core_camera.py ui_mainwindow.py ui_wifi.py ui_keybo
 python check_debug.py
 ```
 
-No linter config or CI. Run syntax checks and `check_debug.py` before deployment. GPS serial requires `/dev/serial0` at 9600 baud (微雪 L76X default).
+No linter config. Image CI is in `.github/workflows/build-image.yml`. Run syntax checks and `check_debug.py` before deployment. GPS serial requires `/dev/serial0` at 9600 baud (微雪 L76X default).
 
 ## Architecture
 
@@ -128,3 +128,5 @@ Runtime data stored under `~/Videos/`: recordings, `wifi_passwords.json`, `stora
 - **Storage**: `storage_devices_updated` publishes cached devices to UI/Web. Do not mount/scan from UI callbacks. Verify a writable mount before opening segments. Cleanup only `REC_*.mkv/mp4`, keeps other files, and fails safely if reserve cannot be met. Run `python check_storage.py`.
 
 - **One-command installer**: `deploy.sh` targets Debian/Raspberry Pi OS Lite arm64 (12+). Run `bash -n deploy.sh` and `python scripts/check_deploy.py` after changes. Installer tests mock host mutations in temporary directories. Managed service/data paths are documented in README.md; do not run the installer on the development host.
+
+- **Flashable image**: `scripts/image/build.sh` requires an isolated native ARM64 root runner and loop mounts. Never run it on the live target. Run `python scripts/image/check_config.py` for safe static checks. Keep all per-device passwords/host keys out of build artifacts; generate them on the Pi.
