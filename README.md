@@ -101,3 +101,5 @@ Actions → **Verify image in QEMU** 下载指定构建任务已经生成的镜�
 交互式首次账号设置在测试副本中跳过；摄像头用合成输入，GPS 未测试，界面使用 Qt 离屏渲染。
 HDMI、触屏、USB 硬件和真实 Kiosk 仍需实机验收。
 在 `image-qemu-verification` 产物下载串口日志和 JSON 结果；失败也会上传日志。
+
+最近一次实际虚拟验证 **未完全通过**：通用 ARM 系统与多数应用探测通过，录像时长检查失败，Pi 4B 板级模拟未完成启动。详见 [虚拟验证报告](docs/IMAGE-VALIDATION.md)。

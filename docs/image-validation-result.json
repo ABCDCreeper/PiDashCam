@@ -1,0 +1,48 @@
+{
+  "system_booted": true,
+  "hardware_emulated": false,
+  "camera": "synthetic 320x180",
+  "gps": "not tested",
+  "display": "Qt offscreen, not HDMI",
+  "checks": {
+    "nginx_active": true,
+    "unique_password_generated": true,
+    "unauthenticated_denied": true,
+    "cross_origin_denied": true,
+    "ssh_keys_generated": true,
+    "model_loaded": true,
+    "preview_frames": true,
+    "mount_validated": true,
+    "authenticated_api": true,
+    "snapshot_jpeg": true,
+    "h264_recording": true,
+    "duration_matches": false,
+    "playback": true,
+    "paused_seek": true,
+    "ui_render": true
+  },
+  "kiosk_service": "ActiveState=active\nSubState=running",
+  "kiosk_journal": "Oct 28 15:04:08 raspberrypi systemd[1]: Started pidashcam.service - PiDashCam touchscreen recorder.\nOct 28 15:04:09 raspberrypi (cage)[1155]: pam_unix(login:session): session opened for user root(uid=0) by root(uid=0)\n",
+  "recording": {
+    "wall_seconds": 7.189,
+    "video_seconds": 4.0,
+    "metadata": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 320,
+          "height": 180
+        }
+      ],
+      "format": {
+        "duration": "4.000000"
+      }
+    }
+  },
+  "passed": false,
+  "emulator": "virt",
+  "interactive_enrollment_tested": false,
+  "pi_hardware_tested": false
+}
