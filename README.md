@@ -15,7 +15,7 @@ setup_file="$(mktemp)" && curl -fL https://raw.githubusercontent.com/ABCDCreeper
 ```
 
 脚本安装系统依赖、独立 Python 环境、中文字体、屏幕服务和开机服务，部署完成后自动启动。
-安装期间需要网络，首次加载识别模型可能较慢。屏幕由 cage 接管 tty1，因此默认要求 Lite 系统。
+安装期间需要网络，安装器会下载并校验模型，再在运行目录离线验证模型加载。屏幕由 cage 接管 tty1，因此默认要求 Lite 系统。
 运行服务名为 `pidashcam`；程序需要管理挂载、网络和 RTC，作为专用设备的 root 服务运行。
 不会创建默认登录密码、格式化 U 盘、删除录像、关闭现有网络连接或自动重启。
 
@@ -34,6 +34,8 @@ bash deploy.sh --check
 sudo bash deploy.sh --no-start
 # 同时配置 GPS UART、I2C、DS3231 RTC；完成后自行重启
 sudo bash deploy.sh --enable-hardware
+# 中国网络可指定 Python 镜像；源码、模型预下载见 DEPLOY.md
+sudo env PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple bash deploy.sh
 # 指定分支或标签
 sudo bash deploy.sh --ref main
 ```
@@ -55,7 +57,7 @@ sudo bash deploy.sh --ref main
 | `sudo systemctl restart pidashcam` | 重启应用 |
 | `sudo systemctl disable --now pidashcam` | 停止并取消开机启动 |
 
-管理页面：`http://<设备IP>`。可在触屏设置中开启 `Pi-Dashcam` 热点，密码 `12345678`。
+管理页面：`http://<设备IP>`，用户名 `admin`，设备随机密码通过 `sudo cat /var/lib/pidashcam/admin-password` 读取。后端只监听 `127.0.0.1:8080`。可在触屏设置中开启 `Pi-Dashcam` 热点，密码 `12345678`。
 安装不会自动切断 Wi-Fi 来开启热点。请只在可信局域网使用管理页面。
 
 更详细的手动安装及硬件说明见 [DEPLOY.md](DEPLOY.md)。脚本安装方式使用本页的服务名和路径，
@@ -86,7 +88,7 @@ python3 check_storage.py
 首次添加、后续修改镜像脚本或工作流时，也会在 main 上自动触发一次构建；普通应用修改后可手动构建。
 工作流仅需要仓库读取权限，不需要存放个人账号、Wi-Fi 或 SSH 密钥等 Secrets。
 通用镜像不包含固定密码：后台密码与 SSH 主机密钥在设备上首次生成。
-镜像的局域网管理入口有登录认证，应用 API 仅监听本机；普通脚本安装方式尚未同步此入口设计。
+镜像和当前脚本安装均使用 nginx 登录认证，应用 API 仅监听本机。
 构建通过仍不等于完成真机启动、触摸、摄像头和 GPS 验收。
 
 ## 虚拟启动验证
@@ -103,3 +105,9 @@ HDMI、触屏、USB 硬件和真实 Kiosk 仍需实机验收。
 在 `image-qemu-verification` 产物下载串口日志和 JSON 结果；失败也会上传日志。
 
 最近一次实际虚拟验证 **未完全通过**：通用 ARM 系统与多数应用探测通过，录像时长检查失败，Pi 4B 板级模拟未完成启动。详见 [虚拟验证报告](docs/IMAGE-VALIDATION.md)。
+
+## 真机部署记录
+
+2026-10-30 在 Pi 4B 上完成现有系统部署、HDMI/触摸、真实 CSI/H.264 录像时长和重启验证。
+仍有 GPS 室外定位、真实车牌及长期负载等未验收项，详见 [真机验证记录](docs/HARDWARE-VALIDATION.md)。
+这些后续修复不包含在之前构建的旧镜像中。

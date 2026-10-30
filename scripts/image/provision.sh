@@ -7,9 +7,9 @@ VENV=/opt/pidashcam/releases/image/venv
 DATA=/var/lib/pidashcam
 apt-get update
 apt-get install -y --no-install-recommends ca-certificates curl sudo python3-venv \
-    python3-pip python3-pyqt5 python3-opencv python3-numpy python3-psutil python3-serial \
+    python3-pip python3-pyqt5 python3-opencv python3-av python3-picamera2 python3-numpy python3-psutil python3-serial \
     network-manager ffmpeg v4l-utils i2c-tools cage seatd libpam-systemd fonts-noto-cjk \
-    qtwayland5 exfatprogs util-linux nginx-light apache2-utils openssl openssh-server
+    qtwayland5 exfatprogs util-linux util-linux-extra nginx-light apache2-utils openssl openssh-server
 install -d -m 0700 "$DATA" "$DATA/Videos" "$DATA/.cache" "$DATA/.hyperlpr3"
 python3 -m venv --system-site-packages "$VENV"
 "$VENV/bin/python" -m pip install --only-binary=:all: 'onnxruntime==1.23.2' tqdm requests fastapi uvicorn python-multipart loguru

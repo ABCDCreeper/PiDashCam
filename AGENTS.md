@@ -6,7 +6,7 @@ A PyQt5 fullscreen touch-screen dashcam application for Linux ARM SBCs (Raspberr
 
 ```bash
 # System dependencies (Debian / Raspberry Pi OS)
-sudo apt install python3-pyqt5 python3-opencv python3-psutil network-manager
+sudo apt install python3-pyqt5 python3-opencv python3-av python3-psutil network-manager
 
 # Python dependencies
 pip install hyperlpr3
@@ -120,7 +120,7 @@ Runtime data stored under `~/Videos/`: recordings, `wifi_passwords.json`, `stora
 - **DS3231 RTC** is the hardware clock; time changes must run `sudo hwclock --systohc` to persist across reboots.
 - **Plates log** caps at 3000 entries; `plates_log.json` lives on the USB storage path, not `~/Videos/`.
 - **Network control** is shared by touch UI and Web in `network_manager.py`, serialized by a lock. Parse nmcli escaping with `split_nmcli_line`; identify APs by wireless mode, not connection names. Polling runs every 5 seconds with one in-flight poll.
-- **Recording timing** uses ffmpeg wallclock input timestamps and CFR duplication. Do not return to assigning a fixed timestamp increment per captured frame; actual capture throughput can be much lower than the configured frame rate. Playback UI uses `worker.playback_fps`.
+- **Recording timing** uses monotonic acquisition PTS carried by PyAV/NUT into ffmpeg, followed by CFR duplication. FFmpeg ingestion wallclock loses cold-start pipe delays. Do not return to assigning a fixed timestamp increment per captured frame; actual capture throughput can be much lower than the configured frame rate. Playback UI uses `worker.playback_fps`. CSI Unicam cameras use `camera_capture.py` with distro Picamera2; USB cameras retain OpenCV. Run `python3 check_camera.py`.
 
 - **Snapshots** use `CameraWorker.get_snapshot_jpeg()` and the preview cache. Never call `worker.cap.read()` from HTTP handlers.
 - **Web server** uses per-instance handlers and `ThreadingHTTPServer.serve_forever()`; pair it with `shutdown()` to stop safely. Video routes only accept recordings; protect the active file and serialize known-plate updates.

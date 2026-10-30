@@ -1,5 +1,6 @@
 # ui_mainwindow.py
 import os
+import time
 import json
 import threading
 import subprocess
@@ -383,6 +384,22 @@ class RecordingSettingsDialog(QDialog):
         )
 
 
+class PageStack(QStackedWidget):
+    """Hidden settings pages must not enlarge the 800x480 main window."""
+    def __init__(self):
+        super().__init__()
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.currentChanged.connect(lambda _: self.updateGeometry())
+
+    def sizeHint(self):
+        page = self.currentWidget()
+        return page.sizeHint() if page else super().sizeHint()
+
+    def minimumSizeHint(self):
+        page = self.currentWidget()
+        return page.minimumSizeHint() if page else super().minimumSizeHint()
+
+
 class DashcamMainWindow(QMainWindow):
     # 标准跨线程信号，确保后台线程分发的 UI 通知 100% 到达且不崩溃
     osd_signal = pyqtSignal(str)
@@ -484,7 +501,7 @@ class DashcamMainWindow(QMainWindow):
         self.no_usb_lbl.setStyleSheet("background-color: rgba(0, 0, 0, 220); color: #dc8888; font-size: 28px; font-weight: bold;")
         self.no_usb_lbl.hide()
 
-        self.stack = QStackedWidget()
+        self.stack = PageStack()
         main_layout.addWidget(self.stack, stretch=2)
 
         self.page_main = self.create_main_page()
@@ -560,6 +577,8 @@ class DashcamMainWindow(QMainWindow):
         header_row.addStretch()
 
         self.gps_status_lbl = QLabel(" GPS: 检测中...")
+        self.gps_status_lbl.setWordWrap(True)
+        self.gps_status_lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.gps_status_lbl.setStyleSheet("color: #888; font-size: 16px; padding: 5px; border: none;")
         header_row.addWidget(self.gps_status_lbl)
 
@@ -575,6 +594,7 @@ class DashcamMainWindow(QMainWindow):
         status_layout.addWidget(self.storage_bar)
 
         self.storage_detail = QLabel("")
+        self.storage_detail.setWordWrap(True)
         self.storage_detail.setStyleSheet("color: #aaa; font-size: 14px; padding: 2px; border: none;")
         status_layout.addWidget(self.storage_detail)
 
@@ -655,6 +675,8 @@ class DashcamMainWindow(QMainWindow):
 
     def toggle_record(self):
         # 绝不在 UI 线程里直接调 stop_recording_file，交给后台底层逻辑无冲突完成
+        action = "start_request" if self.btn_record.isChecked() else "stop_request"
+        print(f"RECORD_TIMING event={action} source=ui mono={time.monotonic():.6f}")
         self.worker.is_recording = self.btn_record.isChecked()
         if self.worker.is_recording:
             self.btn_record.setText("停止录像")
@@ -831,7 +853,8 @@ class DashcamMainWindow(QMainWindow):
             return
         err = data.get("serial_error")
         if err:
-            self.gps_status_lbl.setText(f" GPS: 未连接 ({err})")
+            self.gps_status_lbl.setText(" GPS: 未连接，请检查串口")
+            self.gps_status_lbl.setToolTip(str(err))
             self.gps_status_lbl.setStyleSheet("color: #dc8888; font-size: 16px; padding: 5px;")
         elif data.get("has_fix"):
             self.gps_status_lbl.setText(
@@ -861,7 +884,7 @@ class DashcamMainWindow(QMainWindow):
         elif status["mode"] == "wifi":
             text = f" Wi-Fi 已连: {status['ssid']}"
         elif status["mode"] == "disconnected":
-            text = " 网络未连 (离线)"
+            text = " Wi-Fi 未连接"
         else:
             text = " 网络状态查询失败"
         if status["ip"] != "未知":

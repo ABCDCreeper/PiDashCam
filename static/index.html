@@ -343,6 +343,7 @@ document.querySelectorAll('nav button').forEach(btn => {
     if (page === 'dashboard') refreshAll();
     else if (page === 'videos') loadVideos();
     else if (page === 'plates') loadPlates(1);
+    else if (page === 'known-plates') loadKnownPlates();
     else if (page === 'network') loadNetwork();
   });
 });

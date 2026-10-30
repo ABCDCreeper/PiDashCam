@@ -7,6 +7,9 @@ import threading
 import tempfile
 import subprocess as sp
 import cv2
+import av
+from fractions import Fraction
+from camera_capture import open_camera, PiCameraCapture
 from datetime import datetime
 from PyQt5.QtCore import pyqtSignal, QObject
 from PyQt5.QtGui import QImage
@@ -141,6 +144,7 @@ class GPSWorker(QObject):
             "has_fix": self.has_fix,
             "fix_quality": self.fix_quality,
             "serial_error": self.serial_error,
+            "updated_monotonic": time.monotonic(),
         })
 
     def _emit_empty(self):
@@ -434,7 +438,15 @@ class CameraWorker(QObject):
                 return
             log_file = os.path.join(self.storage_path, "plates_log.json")
             offset_sec = round(self.recording_elapsed(), 1) if self.is_recording else 0
+            gps = getattr(self, "gps_data", {})
+            fresh_fix = bool(gps.get("has_fix") and gps.get("serial_error") is None and
+                             time.monotonic() - gps.get("updated_monotonic", 0) < 5.0)
             entry = {
+                "time_source": "system_clock",
+                "location_source": "gps_nmea" if fresh_fix else None,
+                "gps_has_fix": fresh_fix,
+                "latitude": gps.get("latitude") if fresh_fix else None,
+                "longitude": gps.get("longitude") if fresh_fix else None,
                 "time_str": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "timestamp": now,
                 "plate": plate,
@@ -511,12 +523,7 @@ class CameraWorker(QObject):
 
     def start_camera(self):
         if self.cap is None or not self.cap.isOpened():
-            self.cap = cv2.VideoCapture(0)
-            # 设置 MJPG 格式以支持 1080p（Pi Camera YUYV 最高仅 800×448）
-            self.cap.set(cv2.CAP_PROP_FOURCC, 1196444237)  # MJPG
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-            self.cap.set(cv2.CAP_PROP_FPS, self.fps_target)
+            self.cap = open_camera(self.width, self.height, self.fps_target)
         self.running = True
         self.gps.start()
         self._camera_thread = threading.Thread(target=self._loop, daemon=True)
@@ -528,6 +535,13 @@ class CameraWorker(QObject):
         import re
         res_set = set()
         fps_set = set()
+
+        if isinstance(self.cap, PiCameraCapture):
+            # Processed output sizes, rather than raw Unicam Bayer formats.
+            modes = self.cap.sensor_modes
+            resolutions = [(w, h) for w, h in ((640, 480), (1280, 720), (1920, 1080))
+                           if any("size" in m and m["size"][0] >= w and m["size"][1] >= h for m in modes)]
+            return resolutions, [15, 25, 30]
 
         # 方案 1：v4l2-ctl（精确，不受 OpenCV 占用影响）
         try:
@@ -641,11 +655,7 @@ class CameraWorker(QObject):
             # 2. 重启摄像头
             if self.cap and self.cap.isOpened():
                 self.cap.release()
-            self.cap = cv2.VideoCapture(0)
-            self.cap.set(cv2.CAP_PROP_FOURCC, 1196444237)  # MJPG
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-            self.cap.set(cv2.CAP_PROP_FPS, self.fps_target)
+            self.cap = open_camera(self.width, self.height, self.fps_target)
             # 3. 恢复录制
             if was_recording:
                 self.is_recording = True
@@ -664,6 +674,7 @@ class CameraWorker(QObject):
             time.sleep(0.2)
             return
         ret, frame = self.cap.read()
+        self._last_capture_monotonic = time.monotonic()
         if not ret:
             time.sleep(0.01)
             return
@@ -885,14 +896,11 @@ class CameraWorker(QObject):
         encoder = self._hw_encoder or "libx264"
         cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostats",
-            "-f", "rawvideo", "-pix_fmt", "bgr24",
-            "-s", f"{self.width}x{self.height}",
-            "-framerate", str(fps),
-            # rawvideo 没有时间戳。按实际读入时间打戳，再由编码器补帧，
-            # 避免低吞吐时把数秒画面挤成一秒；小探测窗口避免启动缓存。
-            "-use_wallclock_as_timestamps", "1",
-            "-probesize", "32", "-analyzeduration", "0", "-fpsprobesize", "0",
-            "-i", "-",
+            "-progress", "pipe:1", "-stats_period", "0.1",
+            # NUT carries acquisition PTS across pipe/startup delays. FFmpeg
+            # wallclock timestamps would discard time blocked on its first read.
+            "-f", "nut", "-probesize", "32", "-analyzeduration", "0",
+            "-fpsprobesize", "0", "-i", "-",
             "-c:v", encoder,
             "-b:v", "4M",
             "-g", "30",
@@ -907,8 +915,30 @@ class CameraWorker(QObject):
         # 不使用无人读取的 stderr PIPE，避免长时间录制被日志堵住。
         error_log = tempfile.TemporaryFile()
         try:
-            proc = sp.Popen(cmd, stdin=sp.PIPE, stderr=error_log)
+            spawn_started = time.monotonic()
+            proc = sp.Popen(cmd, stdin=sp.PIPE, stdout=sp.PIPE, stderr=error_log)
             proc._dashcam_error_log = error_log
+            proc._dashcam_first_input = False
+            proc._dashcam_last_pts = -1
+            proc._dashcam_mux = av.open(proc.stdin, mode="w", format="nut")
+            stream = proc._dashcam_mux.add_stream("rawvideo", rate=int(fps))
+            stream.width, stream.height, stream.pix_fmt = self.width, self.height, "bgr24"
+            stream.time_base = stream.codec_context.time_base = Fraction(1, 1000000)
+            proc._dashcam_stream = stream
+            print(f"RECORD_TIMING event=encoder_spawn mono={time.monotonic():.6f} "
+                  f"started={spawn_started:.6f} pid={proc.pid} codec={encoder}")
+            # Drain progress continuously; readiness means the first encoded output,
+            # not merely Popen success. Keep this independent of Qt and camera reads.
+            def read_progress():
+                first_output = False
+                try:
+                    for line in proc.stdout:
+                        if line.startswith(b"frame=") and int(line.split(b"=", 1)[1]) > 0 and not first_output:
+                            first_output = True
+                            print(f"RECORD_TIMING event=encoder_first_output mono={time.monotonic():.6f} pid={proc.pid}")
+                finally:
+                    proc.stdout.close()
+            threading.Thread(target=read_progress, daemon=True).start()
             return proc
         except Exception as e:
             error_log.close()
@@ -918,7 +948,22 @@ class CameraWorker(QObject):
     def _write_frame(self, frame):
         """向 ffmpeg 编码器写入一帧"""
         try:
-            self._encoder_proc.stdin.write(frame.tobytes())
+            proc = self._encoder_proc
+            first_input = not getattr(proc, "_dashcam_first_input", False)
+            if first_input:
+                print(f"RECORD_TIMING event=first_input_begin mono={time.monotonic():.6f} pid={proc.pid}")
+            captured = getattr(self, "_last_capture_monotonic", time.monotonic())
+            elapsed = max(0.0, captured - self._record_start_monotonic)
+            pts = 0 if first_input else max(proc._dashcam_last_pts + 1, round(elapsed * 1000000))
+            video_frame = av.VideoFrame.from_ndarray(frame, format="bgr24")
+            video_frame.pts, video_frame.time_base = pts, Fraction(1, 1000000)
+            for packet in proc._dashcam_stream.encode(video_frame):
+                proc._dashcam_mux.mux(packet)
+            proc._dashcam_last_pts = pts
+            if first_input:
+                proc.stdin.flush()
+                proc._dashcam_first_input = True
+                print(f"RECORD_TIMING event=first_input_written mono={time.monotonic():.6f} pid={proc.pid}")
             self._segment_frame_count += 1
             self._total_recorded_frames += 1
         except BrokenPipeError:
@@ -929,7 +974,18 @@ class CameraWorker(QObject):
         if self._encoder_proc is None:
             return
         proc = self._encoder_proc
+        print(f"RECORD_TIMING event=encoder_close_begin mono={time.monotonic():.6f} pid={proc.pid} inputs={self._segment_frame_count}")
         self._encoder_proc = None
+        try:
+            mux = getattr(proc, "_dashcam_mux", None)
+            if mux:
+                try:
+                    for packet in proc._dashcam_stream.encode(None):
+                        mux.mux(packet)
+                finally:
+                    mux.close()
+        except Exception as exc:
+            print(f"编码流收尾失败: {exc}")
         try:
             if proc.stdin:
                 proc.stdin.close()
@@ -940,6 +996,7 @@ class CameraWorker(QObject):
         except sp.TimeoutExpired:
             proc.kill()
             proc.wait()
+        print(f"RECORD_TIMING event=encoder_exit mono={time.monotonic():.6f} pid={proc.pid} status={proc.returncode}")
         error_log = getattr(proc, "_dashcam_error_log", None)
         if error_log:
             if proc.returncode:

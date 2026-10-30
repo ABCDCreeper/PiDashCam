@@ -1,420 +1,156 @@
-# DEPLOY.md — 车缘 DashCam 部署手册
+# PiDashCam 部署与真机验收
 
-从空白 SD 卡到完整可运行系统的分步指南。
+以当前 `deploy.sh` 为准，支持 Raspberry Pi OS Lite / Debian 12+ arm64。
+本项目的服务以 root 运行，用于专用设备的挂载、网络、串口和 RTC 控制；这不是最小权限隔离。
+不需要额外创建 `cam` 用户、设置固定密码或将 seatd socket 改成 666。
 
-推荐先使用 [README.md](README.md) 中的一键安装脚本 `deploy.sh`。下文为旧版手动配置示例；一键安装使用 `pidashcam.service`、`/opt/pidashcam` 和 `/var/lib/pidashcam`，不需要另建 `cam` 用户或手动部署旧服务。
+## 已安装 Raspberry Pi OS Lite
 
----
-
-## 1. 硬件清单
-
-| 组件 | 型号 / 规格 | 备注 |
-|---|---|---|
-| 主板 | Raspberry Pi 4B / 5 (2GB+) | 或兼容 ARM SBC |
-| 摄像头 | USB 摄像头 (支持 MJPG) | 测试通过：罗技 C270 / C920 |
-| GPS | 微雪 L76X | 可选，GPIO 串口 `/dev/serial0` |
-| RTC | DS3231 | 必须，I2C 接口，断电保存时间 |
-| 屏幕 | HDMI 触控屏 (≥800×480) | 5-7 寸车载屏 |
-| 存储 | USB 闪存盘 (≥16GB) | FAT32 / exFAT |
-| WiFi | 板载无线网卡 | 支持 AP 模式 |
-
----
-
-## 2. 系统安装
-
-### 2.1 烧录 Raspberry Pi OS
-
-用 Raspberry Pi Imager 烧录 **Raspberry Pi OS Lite (64-bit, Bookworm)**：
-
-- **OS**: Raspberry Pi OS Lite (64-bit)
-- **Storage**: ≥16GB microSD
-- **Imager 预设**（可选）：
-  - Hostname: `dashcam`
-  - Username: `cam` 密码: `dashcam2024`
-  - WiFi: 先不配（后面用热点模式）
-  - SSH: 开启
-  - Locale: Asia/Shanghai
-
-烧录后插入树莓派，上电启动。
-
-### 2.2 首次 SSH 连接
+先用 Imager 设置自己的账号和 SSH 公钥，再连接设备。安装器保留已有 SSH 配置、主机密钥与网络连接，
+不会设置 root 密码、自动开启热点、格式化磁盘或自动重启。镜像的首次用户设置只适用于预制镜像，见
+[scripts/image/FLASHING.md](scripts/image/FLASHING.md)，不要在已配置好的系统上执行镜像 provision.sh。
 
 ```bash
-# 网线直连或先临时配 WiFi 后：
-ssh cam@dashcam.local
-# 或直接 IP：
-ssh cam@192.168.x.x
+bash deploy.sh --check
+sudo bash deploy.sh
+# 不立即接管 tty1（服务下次开机运行）
+sudo bash deploy.sh --no-start
 ```
 
----
+安装使用发行版 Qt/OpenCV/NumPy 和独立 venv，模型下载后验证固定 SHA-256，
+在实际服务 HOME 中离线加载、推理成功后才切换版本。更新失败恢复上一版应用和 unit；
+APT、模型缓存及 nginx 配置不在应用回滚范围内。安装前检查已有 nginx 站点，备份任何自定义配置。
+默认发行版站点可自动替换，自定义 default 站点会让安装中止；其他同端口站点应先由管理员处理。
 
-## 3. 系统配置
+`--source DIR` 从干净且已经提交的本地 Git checkout 部署，不访问 GitHub；以该 checkout 的 HEAD 为准，
+此时 `--ref` 不选择版本。`--model-dir DIR` 指定四个 ONNX 文件所在目录，仍强制校验。
+`--wheelhouse DIR` 从本地 wheel 目录安装 Python 依赖，不访问 PyPI。
 
-### 3.1 基础更新 + 必要工具
+## 中国网络环境
+
+64 位 Raspberry Pi OS 使用 Debian arm64 仓库，**不要换成 32 位 Raspbian 仓库**。
+先备份 `/etc/apt/sources.list` 和 `/etc/apt/sources.list.d/`，保留 Suites、Components、Signed-By。
+在 `.sources` / `.list` 中仅替换对应 URI：
+
+| 原 URI | 国内镜像示例 |
+| --- | --- |
+| `http://deb.debian.org/debian/` | `https://mirrors.tuna.tsinghua.edu.cn/debian/` |
+| `http://archive.raspberrypi.com/debian/` | `https://mirrors.tuna.tsinghua.edu.cn/raspberrypi/` |
+
+安全更新优先官方源；无法连接时可使用 `/debian-security/` 镜像，但需考虑镜像同步延迟。
+参考 [Debian 镜像说明](https://mirrors.tuna.tsinghua.edu.cn/help/debian/) 和
+[Raspberry Pi 镜像说明](https://mirrors.tuna.tsinghua.edu.cn/help/raspberrypi/)。不要关闭签名或 TLS 校验。
+
+Python 安装可使用临时环境变量（不改系统 pip 配置）：
 
 ```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y git python3-pip python3-pyqt5 python3-opencv \
-                    python3-psutil network-manager v4l-utils i2c-tools \
-                    cage seatd ffmpeg acl libcap2-bin
+sudo env PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple bash deploy.sh
 ```
 
-| 包 | 作用 |
-|---|---|
-| `cage` | Wayland kiosk compositor，让 PyQt5 直接在 Wayland 上全屏，无需桌面环境 |
-| `seatd` | 最小化 seat 管理守护进程，为 cage 提供 DRM/输入设备访问 |
-| `ffmpeg` | 录制硬件 H.264 编码 + Web 管理页 MKV→MP4 转封装 |
-| `acl` | `getfacl` 命令，调试 DRM 设备权限（故障排查用） |
-| `libcap2-bin` | `getcap`/`setcap` 命令，调试 Linux capabilities（故障排查用） |
-
-### 3.2 启用 I2C / 串口 / 摄像头
+GitHub 不可达时，在能访问仓库的电脑克隆最新 main、完成修改和提交后，通过 SFTP 上传整个 checkout。
+模型也可先在电脑下载再上传：
 
 ```bash
-sudo raspi-config nonint do_i2c 0
-sudo raspi-config nonint do_serial_hw 0
-sudo raspi-config nonint do_serial_console 1   # 禁用串口控制台
-sudo raspi-config nonint do_camera 0
-sudo raspi-config nonint do_legacy_camera 0
+python3 scripts/prepare_models.py --data /path/to/model-cache
+# 上传 model-cache/.hyperlpr3/20230229/onnx/ 中的四个文件
+sudo env PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+  bash /path/to/PiDashCam/deploy.sh --source /path/to/PiDashCam --model-dir /path/to/onnx
 ```
 
-重启使生效：
+## 硬件与权限
+
+HDMI 推荐 800×480；先查看 `/sys/class/drm/card*-HDMI-A-*/status`、`modes` 和实际 DRM 状态，
+不要仅凭 service active 判定屏幕显示成功。Cage 通过 seatd 直接管理 DRM 和输入设备，
+这不同于 logind/udev 的会话 ACL 机制；不要使用 `chmod 666 /run/seatd.sock`。
+当前应用 root 服务直接使用 seatd，不创建 PAM 登录会话，避免子进程移出服务 cgroup、日志归入会话而非应用服务。
+不需要额外用户组；其他用户部署需要单独核实 seatd socket、video、render、input 权限。
+
+USB 摄像头使用 OpenCV 的索引 0，优先检查 `v4l2-ctl --list-devices` 和 `/dev/video0` 的实际采集能力。
+编码器 `/dev/video11` 等节点存在不等于有摄像头。CSI Unicam 节点自动使用发行版 Picamera2/libcamera 获取处理后的 BGR 帧，需安装 python3-picamera2。
+可用 DASHCAM_CAMERA_BACKEND=opencv 或 picamera2 显式选择后端；CSI 不直接读取原始 Bayer 节点。
+
+GPS 可选，读取 `/dev/serial0` 9600 baud 的 NMEA。车牌日志时间来自系统时钟；
+仅在有定位且 NMEA 更新未超过 5 秒时保存 GPS 坐标与 gps_nmea 来源，否则坐标与来源为空，
+不将 0,0 或过期定位当作真实地点。实际定位仍需在可接收卫星的环境验收。
+DS3231 仅在实际接入时配置。`--enable-hardware` 会启用 UART/I2C、关闭串口控制台并添加 DS3231 overlay，
+需要手动重启，不应在未确认硬件时使用。
+时间标注来自系统时钟；网络时间同步不代表断电后的 RTC 保时已验证。
+Trixie 的 hwclock 由 util-linux-extra 提供；确认 NTP 已同步后，使用 hwclock --systohc --utc 初始化 DS3231，再读回校验。设备时区需按使用地点核实。
+
+录像仅保存到可写的独立 USB 挂载，不回退到系统盘。系统启动 U 盘应从录像设备扫描中排除。
+清理仅涉及 `REC_*.mkv/mp4`，在占用达到 88% 或剩余不足 1.5 GiB 时删除旧分段；无法满足空间预留时停止录像。
+不自动格式化未知盘；任何清空、格式化或烧录均须确认路径、型号、容量和挂载点。
+
+## 认证和访问
+
+后端仅监听 `127.0.0.1:8080`，nginx 在 LAN 的 80 端口提供 Basic 认证和同源检查。
+首次安装在设备生成随机 admin 密码，重复安装保留它。使用自己的 SSH 登录后读取：
 
 ```bash
-sudo reboot
+sudo cat /var/lib/pidashcam/admin-password
 ```
 
-### 3.3 配置 DS3231 RTC
+浏览器访问 `http://<设备IP>`。仅用于可信局域网，公网访问需要另行配置 TLS 与访问控制。
+不要把密码、私钥、网络配置或运行数据提交到 Git 或排障报告。
+
+## 日常操作
 
 ```bash
-# 加载 RTC 模块
-echo "dtoverlay=i2c-rtc,ds3231" | sudo tee -a /boot/firmware/config.txt
-
-# 同步网络时间到 RTC（首次需要联网）
-sudo systemctl stop fake-hwclock
-sudo fake-hwclock save
-sudo hwclock -w
+sudo systemctl status pidashcam seatd nginx
+sudo systemctl start pidashcam
+sudo systemctl stop pidashcam
+sudo systemctl restart pidashcam
+sudo systemctl enable pidashcam seatd nginx
+sudo systemctl disable --now pidashcam
+sudo journalctl -u pidashcam -b --no-pager
+sudo journalctl -u pidashcam -f
 ```
 
-### 3.4 卸载自动挂载服务（避免冲突）
+应用和 venv：`/opt/pidashcam/current`；旧版本：`/opt/pidashcam/releases`；
+运行数据：`/var/lib/pidashcam/Videos`。应用退出由 systemd 自动重启，主动 systemctl stop 不会触发重启。
 
-DashCam 通过 `SystemUtils` 自己管理 U 盘挂载，需要禁用系统自动挂载：
+## 部署检查与验收边界
+
+修改代码后先执行语法检查、`python3 scripts/check_deploy.py`、`python3 scripts/image/check_config.py`，
+并在具备 Qt/OpenCV/FFmpeg 的环境执行 `python3 check_debug.py` 和 `python3 check_storage.py`。
+模拟测试不会代替真实硬件验收。已有镜像部分通过的虚拟结论见 [docs/IMAGE-VALIDATION.md](docs/IMAGE-VALIDATION.md)。
+
+真机需要记录以下证据：
+
+- 服务 enabled、启动日志、退出后的重启、重启整机后的状态；seatd、DRM、会话和输入设备实际权限。
+- HDMI 实际输出 800×480，人工确认画面；触摸若存在，检查坐标与边缘点击。
+- 真实摄像头预览、JPEG 截图、模型推理、真实车牌及时间/地点来源。
+- 未认证访问 401、认证访问成功、跨站请求 403、后端 LAN 端口不可达。
+- 存储挂载、目录权限、可用容量与保留策略；真实插拔需要防止损坏仍在写入的数据。
+- WiFi 扫描、连接及断网恢复；远程操作须保留有线链路，并使用可回滚的网络配置，避免切断唯一 SSH 路径。
+
+## 录像时长定位
+
+`journalctl -u pidashcam` 中 `RECORD_TIMING` 记录 monotonic 时间：
+启动/停止请求、子进程创建、首帧写入前后、首次编码输出、编码器关闭和退出。
+首次编码输出来自 FFmpeg progress，代表已有编码帧，并非采集设备已就绪的精确时刻。
+首帧 pipe 写入成功只证明交给编码器，不证明已经落盘。对比这些阶段定位启动延迟和处理吞吐。
+应用将到帧时刻的 monotonic 时间戳通过 PyAV/NUT 送入 FFmpeg，再由 CFR 补帧，
+避免 FFmpeg 冷启动阻塞首帧管道时丢掉时间。系统校时仍会触发换段；时间戳不按采集帧数固定递增。
+
+使用真实摄像头，分别进行首次和后续多次录像（建议短段及 30/60 秒），同时记录实际操作窗口，
+用画面中的时钟/运动核实播放速度，检查停止到收尾的延迟。对每个文件执行：
 
 ```bash
-sudo apt purge -y usbmount 2>/dev/null
-# 禁用 udisks2 自动挂载
-sudo systemctl mask udisks2
+ffprobe -v error -count_frames -show_entries \
+  stream=codec_name,r_frame_rate,avg_frame_rate,time_base,start_time,duration,nb_read_frames:format=start_time,duration \
+  -of json /path/to/REC_file.mkv
+ffprobe -v error -select_streams v:0 -show_entries frame=best_effort_timestamp_time,pkt_duration_time \
+  -of csv /path/to/REC_file.mkv
 ```
 
-### 3.5 配置 WiFi 热点
-
-DashCam 启动时如果没连 WiFi，会处于离线状态。可以先配热点：
-
-```bash
-sudo nmcli connection add type wifi ifname wlan0 con-name Pi-Dashcam \
-    autoconnect yes ssid Pi-Dashcam
-sudo nmcli connection modify Pi-Dashcam 802-11-wireless.mode ap \
-    802-11-wireless.band bg ipv4.method shared connection.autoconnect-priority -999
-sudo nmcli connection modify Pi-Dashcam wifi-sec.key-mgmt wpa-psk \
-    wifi-sec.psk "12345678"
-```
-
-热点由 `network_manager.py` 统一管理，默认 SSID 为 `Pi-Dashcam`，密码为 `12345678`。
-通过界面开启热点会将已有同名配置更新为这些值。连接其他 Wi-Fi 时会暂时关闭热点自动连接，
-保留 2 秒网卡模式切换等待；连接失败则恢复原热点。
-
-非 root 服务用户需要无密码执行 `nmcli` 的权限；应用使用 `sudo -n`，不会等待密码输入。
-用 `command -v nmcli` 核对路径，再执行 `sudo visudo -f /etc/sudoers.d/dashcam-network`，
-加入下列规则（`cam` 替换为实际运行用户）：
-
-```sudoers
-cam ALL=(root) NOPASSWD: /usr/bin/nmcli
-```
-
-可用 `sudo -n nmcli radio wifi` 检查该权限。缺少权限时应用会明确报告失败。
-
-### 3.6 启用 seatd 并配置权限（Wayland 必需）
-
-seatd 是一个最小化 seat 管理守护进程，负责在无桌面环境下管理 DRM 设备和输入设备的访问权。
-
-```bash
-sudo systemctl enable seatd
-sudo systemctl start seatd
-# cam 用户加入必要组：video（GPU + V4L2 硬件编码器）、render（硬件加速）、input（触摸屏）、plugdev（USB）
-sudo usermod -aG video,render,input,plugdev cam
-```
-
-**权限原理**（重要）：
-
-seatd 通过 **logind session** 动态授权：
-1. systemd unit 中 `PAMName=login` 为 `cam` 创建 login session（`loginctl` 可见）
-2. seatd 检测到 `cam` 是 seat0 的活跃用户，自动添加 ACL 到 `/dev/dri/card0`、`/dev/input/*`
-3. `Environment="LIBSEAT_BACKEND=seatd"` 通知 cage/wlroots 用 seatd 而非 elogind
-
-因此 `cam` 对 DRM 设备**不一定需要** `video` 组——seatd 绕过了 Unix 组权限。但 `video` 组是**必需的**：V4L2 硬件编码器 `/dev/video11` 通过 Unix 组权限控制。
-
-> 加入组后需要**重新登录**或重启才能生效。
-
-### 3.7 为什么用 cage 而不是 X11
-
-传统做法是在 X11 桌面（或 `startx`）上运行 PyQt5。但车载场景下：
-
-- ❌ X11 拖着一个完整的桌面会话，浪费 CPU/内存
-- ❌ 需要配 `~/.xinitrc`、`DISPLAY`、`XAUTHORITY`
-
-cage + seatd 方案：
-
-- ✅ 零桌面环境，系统仅跑一个 compositor + 一个应用
-- ✅ PyQt5 直接通过 `QT_QPA_PLATFORM=wayland` 渲染
-- ✅ DRM 直接写屏，无 X11 中间层，更低延迟
-- ✅ cage 自动处理 VT 切换、全屏、屏幕旋转
-
-### 3.8 验证硬件编码器
-
-DashCam 会自动检测并使用树莓派 V4L2 H.264 硬件编码器（`h264_v4l2m2m`）。编码器不可用时自动回退到 ffmpeg `libx264` 软件编码。
-
-```bash
-# 确认设备节点存在
-ls -la /dev/video11
-# 输出: crw-rw----+ 1 root video 81, 11 ... /dev/video11
-
-# 确认 ffmpeg 支持
-ffmpeg -encoders 2>/dev/null | grep h264_v4l2m2m
-# 输出: V..... h264_v4l2m2m    V4L2 mem2mem H.264 encoder wrapper
-
-# 快速编码测试
-ffmpeg -f lavfi -i testsrc2=size=32x32:rate=1 -c:v h264_v4l2m2m -frames:v 1 -f null -
-```
-
-> cam 用户必须在 `video` 组中（见 3.6 节），且 systemd unit 需配置 `SupplementaryGroups=video`。
-
----
-
-## 4. 应用部署
-
-### 4.1 克隆代码
-
-```bash
-cd ~
-git clone https://github.com/your-org/DashCam.git
-# 或手动拷贝：
-# scp -r . cam@192.168.x.x:~/DashCam/
-cd ~/DashCam
-```
-
-### 4.2 安装 Python 依赖
-
-```bash
-# HyperLPR3 车牌识别
-pip3 install hyperlpr3 --break-system-packages
-
-# GPS 串口（可选）
-pip3 install pyserial --break-system-packages
-```
-
-> `--break-system-packages` 在 Raspberry Pi OS Bookworm 下必须，因为系统强制 PEP 668。
-
-### 4.3 端口 80 权限（关键）
-
-Web 管理页面默认监听 **端口 80**（标准 HTTP，无需输端口号）。1024 以下端口需要 `CAP_NET_BIND_SERVICE` 能力。
-
-由于应用通过 systemd 以 **非 root 用户** (`cam`) 运行，权限通过 `AmbientCapabilities` 注入——**无需 sudo，无需 setcap**。
-
-在下面的 systemd unit 中已包含：
-
-```
-AmbientCapabilities=CAP_DAC_OVERRIDE CAP_NET_BIND_SERVICE
-```
-
-| 能力 | 用途 |
-|---|---|
-| `CAP_DAC_OVERRIDE` | 允许 `sudo mount` / `chmod` 操作 U 盘 |
-| `CAP_NET_BIND_SERVICE` | 允许监听 80 端口 |
-
-> 如果手动测试（不通过 systemd），需要临时 sudo 运行或改回 `port=8080`。
-
-### 4.4 语法检查
-
-```bash
-cd ~/DashCam
-python3 -m py_compile main.py web_server.py core_camera.py \
-    ui_mainwindow.py ui_wifi.py ui_keyboard.py touch_widgets.py network_manager.py
-echo "语法检查通过"
-```
-
-可在安装上述 Python 依赖和 ffmpeg 的 Linux 环境中运行回归检查：
-
-```bash
-python3 check_debug.py
-python3 check_storage.py
-```
-
-扩展检查还覆盖 Web 请求解析、快照缓存、暂停拖动、文件删除保护和退出流程；本机端口测试在沙箱禁止监听时会标为跳过。
-网络检查使用模拟命令，不修改主机网络；录像检查使用真实 H.264 编码，验证低帧率和变化帧率下的时长、停止后重录及拖动定位。
-修复后的录像按实际到帧时间补帧，保持设置帧率和正常时长；补帧不会增加摄像头实际捕获的细节。
-旧版已经加速的文件不受此次修复影响。
-
-### 4.5 手动启动测试
-
-**通过 cage 启动**（需要已登录的 TTY）：
-
-```bash
-cd ~/DashCam
-# 在 tty1 上直接跑（需在 seat0 上已登录）
-sudo chmod 666 /run/seatd.sock
-cage -s -m last -- python3 main.py
-```
-
-**通过 SSH 测试（仅验证导入 + API，无 GUI）**：
-
-```bash
-cd ~/DashCam
-# 端口 80 需要 root 或 CAP_NET_BIND_SERVICE
-sudo python3 -c "
-from web_server import DashcamWebServer
-s = DashcamWebServer(port=80)
-s.start()
-import time; time.sleep(60)  # 运行 60 秒供测试
-"
-# 另一个终端：curl http://127.0.0.1/api/status
-```
-
-启动后，手机连接 `Pi-Dashcam` 热点（密码 `12345678`），浏览器访问 `http://192.168.x.x` 即可看到管理仪表盘。
-
----
-
-## 5. 开机自启
-
-### 5.1 systemd 服务（cage + Wayland）
-
-创建 `/etc/systemd/system/dashcam.service`：
-
-```ini
-[Unit]
-Description=车缘 DashCam 行车记录仪
-After=network.target systemd-logind.service seatd.service
-Wants=seatd.service
-Conflicts=getty@tty1.service
-
-[Service]
-User=cam
-Group=cam
-
-# 非 root 用户获得 USB 挂载 + 80 端口权限
-AmbientCapabilities=CAP_DAC_OVERRIDE CAP_NET_BIND_SERVICE
-
-# 通过 PAM 创建 login session（seatd 依赖此 session 授权 DRM/输入设备）
-PAMName=login
-
-# Wayland + seatd 环境变量
-Environment="XDG_RUNTIME_DIR=/run/user/1002"
-Environment="QT_QPA_PLATFORM=wayland"
-Environment="WLR_BACKEND=drm"
-Environment="LIBSEAT_BACKEND=seatd"
-
-# TTY 设置（接管 tty1）
-TTYPath=/dev/tty1
-TTYReset=yes
-TTYVHangup=yes
-TTYVTDisallocate=yes
-StandardInput=tty-force
-StandardOutput=journal
-StandardError=journal
-
-WorkingDirectory=/home/cam/DashCam
-
-# 启动前修复 seatd socket 权限（root 执行，+ 前缀表示不作为服务的一部分校验）
-ExecStartPre=+/bin/chmod 666 /run/seatd.sock
-# cage 启动 PyQt5 应用：-s 允许 VT 切换，-m last 使用最后一个显示器
-ExecStart=/usr/bin/cage -s -m last -- /usr/bin/python3 /home/cam/DashCam/main.py
-
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-```
-
-> **注意**：
-> - `XDG_RUNTIME_DIR` 中的 `1002` 是 `cam` 用户的 UID。用 `id -u cam` 查看实际值，按需修改。
-> - `PAMName=login` 是 seatd 授权的核心——它让 systemd 为 `cam` 创建一个完整的 login session（`loginctl` 可见），seatd 据此开放 DRM/输入设备。
-
-启用：
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable dashcam
-sudo systemctl start dashcam
-```
-
-### 5.2 检查服务状态
-
-```bash
-sudo systemctl status dashcam
-sudo journalctl -u dashcam -f  # 实时日志
-```
-
----
-
-## 6. 验证清单
-
-部署完成后逐项验证：
-
-- [ ] 摄像头画面正常显示（无花屏/黑屏）
-- [ ] U 盘插入后自动挂载，屏幕显示"已用/x%"
-- [ ] 按"开始录像"后 MKV 文件生成在 U 盘
-- [ ] 视频回放可播放，进度条可拖动
-- [ ] GPS 定位数据正常显示（需要空旷地带）
-- [ ] 车牌识别可在画面中标注车牌
-- [ ] 手机连 `Pi-Dashcam` 热点后浏览器访问 `http://<IP>` 可打开管理页面
-- [ ] 管理页面可查看系统状态、视频列表、车牌日志
-- [ ] 管理页面可在线播放视频（需 ffmpeg 已安装）
-- [ ] 管理页面可下载视频文件
-- [ ] 断电重启后时间不丢失（DS3231 正常）
-- [ ] WiFi 连接功能正常（扫描 → 输入密码 → 连接成功）
-
----
-
-## 7. 故障排查
-
-| 问题 | 检查点 |
-|---|---|
-| cage 黑屏/无法启动 | `journalctl -u dashcam -n 50`；确认 `/run/seatd.sock` 权限；核对 `id -u cam` 与 `XDG_RUNTIME_DIR` |
-| seatd socket 权限错误 | `sudo chmod 666 /run/seatd.sock`；确认 systemd unit 有 `ExecStartPre` |
-| DRM 权限拒绝 | `getfacl /dev/dri/card0` 确认 seatd 已加 ACL；`loginctl` 确认 `cam` 在 seat0 上有活跃 session |
-| 摄像头无画面 | `v4l2-ctl --list-devices`；确认 `/dev/video0` 存在 |
-| U 盘不挂载 | `sudo lsblk -f`；确认文件系统为 FAT32/exFAT；`cam` 在 `plugdev` 组 |
-| GPS 无数据 | `sudo cat /dev/serial0` 看是否有 NMEA 输出；确认串口配置 |
-| 端口 80 启动失败 | 确认 systemd unit 有 `AmbientCapabilities=... CAP_NET_BIND_SERVICE`；或临时 `sudo` 运行 |
-| 车牌识别不工作 | `python3 -c "import hyperlpr3; print(hyperlpr3.LicensePlateCatcher())"` |
-| 车机屏幕不亮 | `/boot/firmware/config.txt` 加 `hdmi_force_hotplug=1`；或 `sudo raspi-config` 设分辨率 |
-| 管理页打不开 | `curl http://127.0.0.1/api/status` 看是否有 JSON 返回；检查防火墙 `sudo iptables -L` |
-| 视频在线播放失败 | `which ffmpeg` 确认已安装；`ffmpeg -i 文件.mkv -c copy -f mp4 /dev/null` 测试转封装是否正常 |
-| 视频下载无响应 | 确认 systemd unit 有 `CAP_NET_BIND_SERVICE`；检查 U 盘路径权限 `ls -la /mnt/usb_*/` |
-
----
-
-## 8. 目录结构
-
-```
-~/DashCam/
-├── main.py              # 入口
-├── core_camera.py        # 核心：摄像头 + 录像 + GPS + LPR + 磁盘管理
-├── ui_mainwindow.py      # PyQt5 UI（3 页：主界面 / 设置 / 回放）
-├── ui_wifi.py            # WiFi 扫描 + nmcli 连接
-├── ui_keyboard.py        # 全屏触控键盘
-├── touch_widgets.py      # TapSlider + TouchScrollList
-├── web_server.py         # 管理网页 HTTP 服务器 + REST API
-├── static/
-│   └── index.html        # 管理仪表盘前端
-├── AGENTS.md             # 项目 AI 开发手册
-├── DEPLOY.md             # 本文件
-└── .gitignore
-
-~/Videos/                 # 运行时数据
-├── storage_config.json   # 上次使用的 U 盘路径
-├── video_params.json     # 用户设置的录制参数
-├── wifi_passwords.json   # 记忆的 WiFi 密码
-└── plates_log.json       # 车牌识别日志（在 U 盘上）
-```
-
-存储界面使用后台检测结果，显示当前录像设备、剩余与总容量。循环清理只覆盖 REC_ 开头的行车录像；其他视频和配置保留。挂载失效或空间无法回收时停止录制并提示，不回退到系统盘。
+不能通过放宽容差掩盖时长差异；没有真实摄像头时必须保留此项未验收状态。
+
+## 系统盘 I/O 故障和中断安装
+
+若 APT/dpkg 报 `No such device`、`Input/output error` 或根分区变成只读，先停止安装。
+不要强行 remount 为读写，也不要对仍挂载的根分区运行 fsck。
+通过本地控制台查看内核日志，检查电源、欠压、USB 连接及系统盘；必要时在维护环境离线检查文件系统。
+SSH 无法连接时需要本地恢复或重新上电。恢复后先确认系统盘稳定可写且没有新的 I/O 错误，
+再执行 `sudo dpkg --audit`、`sudo dpkg --configure -a` 和 `sudo apt-get -f install` 修复中断的安装，
+之后重复部署。恢复期间不要误拔系统启动 U 盘，也不要把它用作录像盘。

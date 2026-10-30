@@ -680,6 +680,7 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
             self._send_json({"success": True, "message": "已在录像中"})
             return
 
+        print(f"RECORD_TIMING event=start_request source=http mono={time.monotonic():.6f}")
         worker.is_recording = True
         worker.recording_toggled.emit(True)
         self.osd_messages.append((time.time(), "🌐 远程启动录像"))
@@ -695,6 +696,7 @@ class DashcamAPIHandler(BaseHTTPRequestHandler):
             self._send_json({"success": True, "message": "未在录像中"})
             return
 
+        print(f"RECORD_TIMING event=stop_request source=http mono={time.monotonic():.6f}")
         worker.is_recording = False
         worker.stop_recording_file()
         worker.recording_toggled.emit(False)

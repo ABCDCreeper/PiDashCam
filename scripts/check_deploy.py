@@ -23,12 +23,15 @@ name=Path(sys.argv[0]).name
 args=sys.argv[1:]
 if name=='dpkg': print('arm64')
 elif name=='git':
- if 'clone' in args: Path(args[-1]).mkdir(parents=True)
+ if 'clone' in args:
+  app=Path(args[-1]); (app/'scripts').mkdir(parents=True)
+  (app/'scripts/configure_web.sh').write_text('exit 0')
  else: print('a'*40)
 elif name=='python3':
  if args[:2]==['-m','venv']:
   target=Path(args[-1])/'bin';target.mkdir(parents=True)
   p=target/'python';p.write_text('#!/bin/sh\\nexit 0\\n');p.chmod(0o755)
+ elif args and args[0].endswith('prepare_models.py'): pass
  else: os.execv(os.environ['REAL_PYTHON'], [os.environ['REAL_PYTHON']]+args)
 elif name=='systemctl':
  if 'display-manager' in args: sys.exit(3)
@@ -65,6 +68,11 @@ elif name=='curl':
             self.assertTrue((current/'venv/bin/python').exists())
             unit=(root/'host/systemd/system/pidashcam.service').read_text()
             self.assertIn('DASHCAM_REVISION='+'a'*40,unit)
+            self.assertIn('DASHCAM_HTTP_HOST=127.0.0.1',unit)
+            self.assertIn('DASHCAM_HTTP_PORT=8080',unit)
+            self.assertIn('Restart=always',unit)
+            self.assertIn('StandardOutput=journal',unit)
+            self.assertIn('StandardError=journal',unit)
             data=root/'data/Videos/fixture.json';data.write_text('preserve me')
             second=self.run_fixture(root)
             self.assertEqual(second.returncode,0,second.stderr)
